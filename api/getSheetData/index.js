@@ -1,80 +1,50 @@
 module.exports = async function (context, req) {
-  const sheet = (req.query.sheet || "Sep").toString();
+  try {
+    const sheet = (req.query.sheet || "Sep").toString().trim();
 
-  // These headers MUST match your frontend order:
-  // Email, Name, Date, Start Time, End Time, Booked, Site, Account, Ticket, Shift4 MID
-  const headers = [
-    "Email",
-    "Name",
-    "Date",
-    "Start Time",
-    "End Time",
-    "Booked",
-    "Site",
-    "Account",
-    "Ticket",
-    "Shift4 MID",
-  ];
+    // ✅ Your GAS endpoint (the one that returns headers/rows/ms)
+    // IMPORTANT: this endpoint MUST support ?sheet=Sep
+    const GAS_BASE =
+      "https://script.google.com/a/macros/shift4.com/s/AKfycbxsy7lAvTMPuZf9GW_ER4iuScDIb5vCUhJ0Rx4SA5Pu_1nXXHMSonErxfKj6bJ5T1mPZA/exec";
 
-  // Mock rows (strings in the same order as headers)
-  const rows = [
-    [
-      "tech1@shift4.com",
-      "John Doe",
-      "1/10/2026",
-      "8:00 AM",
-      "5:00 PM",
-      "BOOKED",
-      "Las Vegas",
-      "Shift4",
-      "000123",
-      "009900",
-    ],
-    [
-      "tech2@shift4.com",
-      "Jane Smith",
-      "1/12/2026",
-      "9:00 AM",
-      "6:00 PM",
-      "BOOKED",
-      "New York",
-      "Shift4",
-      "000456",
-      "008800",
-    ],
-  ];
+    const url = `${GAS_BASE}?sheet=${encodeURIComponent(sheet)}`;
 
-  // IMPORTANT:
-  // Your frontend expects epoch ms aligned with each row for local timezone rendering
-  const ms = rows.map((r) => {
-    // Build fake epoch times:
-    // Use Date as midnight local for dateMs
-    // and start/end with same day
-    const d = new Date(r[2]);
-    const dateMs = isNaN(d.getTime()) ? null : d.getTime();
+    const res = await fetch(url, { method: "GET" });
 
-    // start/end fake - we just set them to same date with hours
-    const start = new Date(d);
-    start.setHours(8, 0, 0, 0);
+    if (!res.ok) {
+      const txt = await res.text().catch(() => "");
+      context.res = {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+        body: {
+          error: "GAS getSheetData failed",
+          status: res.status,
+          details: txt,
+        },
+      };
+      return;
+    }
 
-    const end = new Date(d);
-    end.setHours(17, 0, 0, 0);
+    const data = await res.json();
 
-    return {
-      dateMs: isNaN(start.getTime()) ? null : dateMs,
-      startMs: isNaN(start.getTime()) ? null : start.getTime(),
-      endMs: isNaN(end.getTime()) ? null : end.getTime(),
+    // ✅ Return exactly what frontend expects:
+    // { sheet, headers, rows, ms }
+    context.res = {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json",
+        "Cache-Control": "no-store",
+      },
+      body: data,
     };
-  });
-
-  context.res = {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-    body: {
-      sheet,
-      headers,
-      rows,
-      ms,
-    },
-  };
+  } catch (err) {
+    context.res = {
+      status: 500,
+      headers: { "Content-Type": "application/json" },
+      body: {
+        error: "getSheetData exception",
+        message: String(err?.message || err),
+      },
+    };
+  }
 };
