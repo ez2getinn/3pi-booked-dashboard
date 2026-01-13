@@ -1,1 +1,249 @@
+:root{ --shift4:#00A3FF; --shift4-soft:#E6F6FF; }
+html, body { height: 100%; }
+.app { min-height: 100vh; }
 
+/* Header button */
+.sf4-collapse-btn{
+  width:100%; text-align:left; display:flex; align-items:center; justify-content:space-between; gap:8px;
+  background:#fff; border:2px solid var(--shift4); color:var(--shift4);
+  border-radius:12px; padding:12px 14px; margin:8px 0; cursor:pointer;
+  font-weight:900; letter-spacing:.4px; text-transform:uppercase;
+  transition:box-shadow .15s ease, background .12s ease, color .12s ease;
+}
+.sf4-collapse-btn:hover{ filter:brightness(0.985); }
+.sf4-collapse-btn:focus-visible{ outline:none; box-shadow:0 0 0 3px rgba(0,163,255,.25); }
+.sf4-collapse-btn.open{ background:var(--shift4); color:#fff; box-shadow:0 6px 18px rgba(0,163,255,.22); }
+.sf4-collapse-title{ font-size:12px; }
+.sf4-collapse-chevron{ font-size:14px; line-height:1; transform:rotate(0deg); transition:transform .2s ease; }
+.sf4-collapse-btn.open .sf4-collapse-chevron{ transform:rotate(180deg); }
+
+/* Panel body */
+.collapse-panel{
+  display:none; border:1px solid #e2e8f0; border-radius:12px; padding:12px; background:#fff;
+}
+.collapse-panel.open{ display:block; }                  /* size to content by default */
+#panel-yearly.collapse-panel.open{
+  min-height: calc(100vh - 160px);                      /* full height only for YEARLY */
+  overflow:auto;
+}
+
+/* tighten spacing when top panel is closed (no gap) */
+#panel-monthly:not(.open) + .sf4-collapse-btn { margin-top: 8px; }
+
+/* minor tweaks */
+.cards{ margin-top:0; }
+.status-bold{ margin-top:10px; }
+
+/* ================================
+ * THEME / BASE
+ * ================================ */
+:root{
+  --shift4: #00A3FF;       /* Primary accent (Shift4 blue) */
+  --shift4-soft: #E6F6FF;  /* Light tint for subtle gradients */
+}
+html, body {
+  margin: 0;
+  background: #ffffff;
+  color: #0f172a;
+  font: 14px/1.5 Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+}
+.app { max-width: 1180px; margin: 24px auto; padding: 0 16px; }
+
+/* ================================
+ * BRAND HEADER (logo / titles / notice)
+ * ================================ */
+.brand-topbar{
+  display: grid;
+  grid-template-columns: 200px 1fr 200px; /* left logo / center / right notice */
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 8px;
+}
+#leftLogoContainer{
+  display: flex; align-items: center; justify-content: flex-start;
+}
+.left-logo{ display:block; max-height: 48px; width:auto; }
+
+.brand-center{ text-align: center; }
+.brand-title{ margin:0; font-size:22px; font-weight:800; color:#0f172a; }
+.brand-subtitle{ margin-top:2px; font-size:12px; font-weight:700; letter-spacing:.3px; color:#334155; }
+
+.rightNotice{ text-align:right; }
+.internal-bold{ font-weight:900; color:#b91c1c; font-size:12px; letter-spacing:.5px; }
+
+/* Divider under the top bar */
+.divider{
+  border-bottom: 2px solid #e2e8f0;
+  margin-bottom: 16px;
+}
+
+/* ================================
+ * CONTROLS (filters / actions)
+ * ================================ */
+.app-header { display: grid; gap: 12px; margin-bottom: 16px; }
+.controls {
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  background: #f8fafc; border: 1px solid #e2e8f0;
+  padding: 10px; border-radius: 10px;
+}
+.select, .input, .btn {
+  border: 1px solid #cbd5e1; background: #ffffff; color: #0f172a;
+  border-radius: 8px; padding: 8px 10px; font-size: 14px;
+}
+.ml8 { margin-left: 8px; }
+.btn { cursor: pointer; background: var(--shift4); color: white; border-color: var(--shift4); }
+.btn:hover { filter: brightness(0.97); }
+
+/* ================================
+ * SCORECARDS (BOOKED totals by month)
+ * ================================ */
+.cards {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+  margin: 12px 0 8px;
+}
+@media (max-width: 1100px) { .cards { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (max-width: 760px)  { .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+.card {
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: #ffffff;
+  position: relative;
+  cursor: pointer;
+  transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease;
+}
+.card::before{
+  content:""; position:absolute; inset:0; border-radius: 12px;
+  background: linear-gradient(135deg, var(--shift4-soft), #ffffff 60%);
+  opacity: .65; pointer-events:none;
+}
+.card:hover{
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(2, 132, 199, .12);
+  border-color: var(--shift4);
+}
+.card.active{
+  border-color: var(--shift4);
+  box-shadow: 0 0 0 2px rgba(0,163,255,.15) inset;
+}
+.card .title { position: relative; font-size: 12px; color: #475569; margin: 0 0 6px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card .value { position: relative; font-size: 20px; font-weight: 800; color: #0f172a; }
+.card .chip{
+  position:absolute; top:8px; right:8px;
+  background: var(--shift4); color:#fff; font-size:10px; font-weight:700;
+  padding: 2px 6px; border-radius: 999px;
+}
+
+/* ================================
+ * SUMMARY LINE ("Sep: 26 “BOOKED”")
+ * ================================ */
+.status-bold { margin: 6px 0 12px; font-weight: 800; color: #0f172a; }
+
+/* ================================
+ * TABLE (centered headers + cells)
+ * ================================ */
+.table-wrap {
+  background: #ffffff; border: 1px solid #e2e8f0;
+  border-radius: 10px; overflow: hidden;
+}
+
+/* Center everything by default */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: center; /* center all cells by default */
+}
+
+thead th {
+  font-weight: 700; color: #1f2937; font-size: 12px;
+  background: #f1f5f9; border-bottom: 1px solid #e2e8f0; padding: 10px;
+  position: sticky; top: 0; z-index: 1;
+  user-select: none; cursor: pointer;
+  text-align: center;           /* center header text */
+  vertical-align: middle;
+}
+thead th .sort {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;       /* center arrows with label */
+  gap: 6px;
+}
+thead th .arrows { font-size: 10px; color: #94a3b8; }
+thead th.active .arrows { color: var(--shift4); }
+thead th.active.asc .arrows::after  { content: "▲"; }
+thead th.active.desc .arrows::after { content: "▼"; }
+thead th:not(.active) .arrows::after { content: "▲▼"; }
+
+tbody td {
+  border-top: 1px solid #eef2f7; padding: 10px; font-size: 13px; color: #0f172a;
+  text-align: center;            /* center cell text */
+  vertical-align: middle;
+}
+tbody tr:nth-child(even) { background: #fafafa; }
+tbody tr:hover { background: #f5faff; }
+
+.empty-state { text-align: center; padding: 24px; color: #64748b; }
+
+/* ================================
+ * PAGINATION
+ * ================================ */
+.pagination {
+  display: flex; align-items: center; gap: 6px; justify-content: flex-end;
+  margin-top: 12px; flex-wrap: wrap;
+}
+.page-btn, .page-num {
+  border: 1px solid #cbd5e1; background: #ffffff; color: #0f172a;
+  padding: 6px 10px; border-radius: 8px; cursor: pointer; font-size: 13px;
+}
+.page-btn[disabled] { opacity: 0.5; cursor: not-allowed; }
+.page-num.active { background: var(--shift4); color: #fff; border-color: var(--shift4); }
+
+/* ================================
+ * LOADER OVERLAY (Shift4 theme)
+ * ================================ */
+.loader-overlay{
+  position: fixed; inset: 0;
+  background: rgba(255,255,255,0.85);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 9999;
+  /* visible by default; JS will hide when ready */
+  opacity: 1; pointer-events: all; transition: opacity .2s ease;
+}
+.loader-overlay.hidden{ opacity: 0; pointer-events: none; }
+
+.loader-card{
+  display: inline-flex; align-items: center; gap: 14px;
+  background: #ffffff;
+  border: 1px solid #dbeafe;
+  border-radius: 14px;
+  padding: 14px 18px;
+  box-shadow: 0 6px 24px rgba(0,163,255,.18);
+}
+.spinner{
+  width: 28px; height: 28px; border-radius: 50%;
+  border: 3px solid #dbeafe;                /* light ring */
+  border-top-color: var(--shift4);          /* accent */
+  animation: spin 1s linear infinite;
+}
+.loader-lines{
+  display: grid; gap: 2px;
+}
+.loader-main{
+  font-weight: 900; letter-spacing: 2px;
+  color: #0f172a;
+}
+.loader-sub{
+  font-weight: 800; font-size: 12px; color: var(--shift4);
+  letter-spacing: 1.2px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ================================
+ * OPTIONAL UTILS
+ * ================================ */
+.text-left  { text-align: left  !important; }
+.text-right { text-align: right !important; }
+.text-center{ text-align: center!important; }
