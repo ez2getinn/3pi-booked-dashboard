@@ -1,31 +1,71 @@
 /* ============================================================================
- * SHIFT4 Web App – JS (Azure Static Web Apps version)
- * - Converted from Apps Script client to Azure fetch() APIs
- * - Preserves ALL original logic
+ * SHIFT4 Web App – JS (Option B2: Corporate GAS backend, Azure Static frontend)
  *
- * REQUIRED API endpoints (Azure Functions):
- *   GET  /api/getSheetNames
- *   GET  /api/getSheetData?sheet=<sheetName>
- *   GET  /api/getBookedCounts
- *   GET  /api/getVersion
+ * ✅ IMPORTANT:
+ * - Azure Functions CANNOT call private corporate GAS (no login cookies)
+ * - So the BROWSER calls GAS directly (works because user is logged in)
+ *
+ * This file keeps ALL logic from your original Azure version.
+ *
+ * GAS must expose these callable functions:
+ *   getSheetNames()
+ *   getSheetData(sheetName)
+ *   getBookedCounts()
+ *   getVersion()
  * ========================================================================== */
 
-/* ========== Azure fetch wrapper ========== */
-
+/* ========== GAS Base (your corporate web app) ========== */
 const GAS_BASE =
   "https://script.google.com/a/macros/shift4.com/s/AKfycbxb4baiuXwUx0UGj9r79eFVhijOLN0fX3dHSbClYLeVM_AhZSW00uzntZDWGi0iMLIqyA/exec";
 
-
+/* ========== GAS fetch wrapper (replaces Azure /api/*) ========== */
 async function apiGet(path, label = path) {
-  const url = path;
+  // Convert "/api/getSheetNames" style calls into GAS fn calls
+  const clean = String(path || "").trim();
+
+  let gasQuery = "";
+
+  if (clean.startsWith("/api/getSheetNames")) {
+    gasQuery = "fn=getSheetNames";
+  } else if (clean.startsWith("/api/getBookedCounts")) {
+    gasQuery = "fn=getBookedCounts";
+  } else if (clean.startsWith("/api/getVersion")) {
+    gasQuery = "fn=getVersion";
+  } else if (clean.startsWith("/api/getSheetData")) {
+    const urlObj = new URL("https://dummy.com" + clean);
+    const sheet = urlObj.searchParams.get("sheet") || "Jan";
+    gasQuery = `fn=getSheetData&sheet=${encodeURIComponent(sheet)}`;
+  } else {
+    throw new Error(`apiGet(): Unknown endpoint: ${clean}`);
+  }
+
+  const url = `${GAS_BASE}?${gasQuery}`;
+
   try {
-    const res = await fetch(url, { method: "GET" });
-    if (!res.ok) {
-      const txt = await res.text().catch(() => "");
-      console.warn(`[API:${label}] HTTP ${res.status}`, txt);
-      throw new Error(`API error ${res.status}`);
+    const res = await fetch(url, {
+      method: "GET",
+      credentials: "include", // ✅ required for corporate Google auth
+      headers: { Accept: "application/json" },
+    });
+
+    const text = await res.text();
+
+    // Detect HTML login pages
+    const t = text.trim();
+    if (t.startsWith("<!DOCTYPE") || t.startsWith("<html")) {
+      console.warn(`[API:${label}] GAS returned HTML (login required).`);
+      throw new Error(
+        "GAS is private. You must be logged into Shift4 Google to use this app."
+      );
     }
-    return await res.json();
+
+    // Parse JSON safely
+    try {
+      return JSON.parse(text);
+    } catch (e) {
+      console.warn(`[API:${label}] Not valid JSON:`, text.slice(0, 300));
+      throw new Error(`Invalid JSON returned from GAS for: ${label}`);
+    }
   } catch (err) {
     console.warn(`[API:${label}]`, err);
     throw err;
@@ -47,7 +87,9 @@ function initCollapsibles() {
     if (!panel) return;
 
     const initialOpen =
-      btn.classList.contains("open") || btn.getAttribute("aria-expanded") === "true";
+      btn.classList.contains("open") ||
+      btn.getAttribute("aria-expanded") === "true";
+
     setOpen(btn, panel, initialOpen);
 
     btn.addEventListener("click", () => {
@@ -74,7 +116,8 @@ function showLoader() {
 }
 function hideLoader() {
   pendingLoads = Math.max(0, pendingLoads - 1);
-  if (!pendingLoads) document.getElementById("loaderOverlay")?.classList.add("hidden");
+  if (!pendingLoads)
+    document.getElementById("loaderOverlay")?.classList.add("hidden");
 }
 
 /* ========== Gate / Debounce (avoid bursts) ========== */
@@ -108,21 +151,21 @@ const els = {
   cards: document.getElementById("cards"),
 };
 
-let monthTabs = []; // ['Sep 2025', 'Oct 2025', ...]
-let activeMonthName = null; // used in scorecard mode
+let monthTabs = [];
+let activeMonthName = null;
 
 // Modes
-let defaultMode = true; // true: Today→Dec; false: single-month view
+let defaultMode = true;
 let fromTodayLowerBound = true;
 let toEndOfYearUpperBound = null;
 
 // Table state
 let currentRows = [];
-let currentRowsMs = []; // aligned with rows; {dateMs,startMs,endMs}
+let currentRowsMs = [];
 let currentHeaders = [];
 let currentPage = 1;
 let pageSize = (els.pageSize && parseInt(els.pageSize.value, 10)) || 15;
-let sortCol = 2; // Date column index in displayed table
+let sortCol = 2;
 let sortDir = "asc";
 
 const DATE_COL_INDEX = 2;
@@ -152,11 +195,34 @@ const MONTH_MAP = {
   dec: 11,
 };
 
-const MONTHS_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const MONTHS_SHORT = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
 
 const MONTHS_LONG = [
-  "January","February","March","April","May","June",
-  "July","August","September","October","November","December"
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
 ];
 
 function parseTab(name) {
@@ -174,12 +240,12 @@ function endOfYear(d) {
 }
 
 function pickCurrentMonthIndex(names) {
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = now.getMonth();
+  const now = new Date(),
+    y = now.getFullYear(),
+    m = now.getMonth();
 
-  const short = MONTHS_SHORT[m];
-  const long = MONTHS_LONG[m];
+  const short = MONTHS_SHORT[m],
+    long = MONTHS_LONG[m];
 
   let rx = new RegExp(`^(?:${short}|${long})\\s+${y}$`, "i");
   let i = names.findIndex((n) => rx.test(n));
@@ -233,7 +299,9 @@ async function loadTabsAndFirstPaint() {
   tzInfo = detectTimezone();
   ensureTzChip();
 
-  const names = await apiGet("/api/getSheetNames", "getSheetNames").catch(() => []);
+  const names = await apiGet("/api/getSheetNames", "getSheetNames").catch(
+    () => []
+  );
   monthTabs = Array.isArray(names) ? names.slice() : [];
 
   if (!monthTabs.length) {
@@ -260,7 +328,9 @@ function selectCurrentMonth() {
 let lastCardsJSON = "";
 
 async function refreshCards() {
-  const items = await apiGet("/api/getBookedCounts", "getBookedCounts").catch(() => null);
+  const items = await apiGet("/api/getBookedCounts", "getBookedCounts").catch(
+    () => null
+  );
   if (!items) return;
 
   const j = JSON.stringify(items);
@@ -278,13 +348,15 @@ function renderCards(items) {
   }
 
   els.cards.innerHTML = items
-    .map(({ name, count }) => `
+    .map(
+      ({ name, count }) => `
       <div class="card" data-name="${escapeHtml(name)}" title="${escapeHtml(name)}">
         <span class="chip">BOOKED</span>
         <div class="title">${escapeHtml(name)}</div>
         <div class="value">${count}</div>
       </div>
-    `)
+    `
+    )
     .join("");
 }
 
@@ -357,9 +429,9 @@ async function reloadDefaultRange() {
   if (!monthTabs.length) return;
   resetViewState();
 
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = now.getMonth();
+  const now = new Date(),
+    y = now.getFullYear(),
+    m = now.getMonth();
 
   const wanted = monthTabs.filter((n) => {
     const p = parseTab(n);
@@ -368,7 +440,9 @@ async function reloadDefaultRange() {
     return year === y && p.month >= m;
   });
 
-  const list = wanted.length ? wanted : monthTabs.slice(pickCurrentMonthIndex(monthTabs));
+  const list = wanted.length
+    ? wanted
+    : monthTabs.slice(pickCurrentMonthIndex(monthTabs));
 
   let headersPicked = false;
   currentRows = [];
@@ -422,7 +496,9 @@ function drawHeader(headers) {
 
     const th = document.createElement("th");
     th.dataset.col = String(idx);
-    th.innerHTML = `<span class="sort">${escapeHtml(label)} <span class="arrows"></span></span>`;
+    th.innerHTML = `<span class="sort">${escapeHtml(
+      label
+    )} <span class="arrows"></span></span>`;
     th.addEventListener("click", () => onHeaderClick(idx));
     tr.appendChild(th);
   });
@@ -451,14 +527,20 @@ function updateHeaderState() {
 }
 
 function applyDateWindow(rows, rowsMs) {
-  if (!Array.isArray(rows) || !Array.isArray(rowsMs) || rows.length !== rowsMs.length)
+  if (
+    !Array.isArray(rows) ||
+    !Array.isArray(rowsMs) ||
+    rows.length !== rowsMs.length
+  )
     return [];
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
   const t0 = fromTodayLowerBound ? today.getTime() : -Infinity;
-  const t1 = toEndOfYearUpperBound ? toEndOfYearUpperBound.getTime() : Infinity;
+  const t1 = toEndOfYearUpperBound
+    ? toEndOfYearUpperBound.getTime()
+    : Infinity;
 
   const items = [];
   for (let i = 0; i < rows.length; i++) {
@@ -485,14 +567,12 @@ function renderTable() {
     const va = a.row[sortCol];
     const vb = b.row[sortCol];
 
-    // Date col
     if (sortCol === DATE_COL_INDEX) {
       const ta = a.ms?.dateMs ?? -Infinity;
       const tb = b.ms?.dateMs ?? -Infinity;
       return sortDir === "asc" ? ta - tb : tb - ta;
     }
 
-    // Start/End time
     if (sortCol === START_COL_INDEX || sortCol === END_COL_INDEX) {
       const key = sortCol === START_COL_INDEX ? "startMs" : "endMs";
       const ta = a.ms?.[key] ?? -Infinity;
@@ -504,7 +584,6 @@ function renderTable() {
       return sortDir === "asc" ? da - db : db - da;
     }
 
-    // Generic compare
     const na = Number(va);
     const nb = Number(vb);
 
@@ -544,7 +623,6 @@ function renderTable() {
       const tr = document.createElement("tr");
       const cells = row.slice();
 
-      // local render
       cells[DATE_COL_INDEX] = fmtLocalDate(ms?.dateMs ?? null);
       cells[START_COL_INDEX] = fmtLocalTime(ms?.startMs ?? null);
       cells[END_COL_INDEX] = fmtLocalTime(ms?.endMs ?? null);
@@ -577,15 +655,18 @@ function drawPagination(totalPages) {
     return b;
   };
 
-  nav.appendChild(mk("First", currentPage === 1, () => {
-    currentPage = 1;
-    renderTable();
-  }));
-
-  nav.appendChild(mk("Prev", currentPage === 1, () => {
-    currentPage = Math.max(1, currentPage - 1);
-    renderTable();
-  }));
+  nav.appendChild(
+    mk("First", currentPage === 1, () => {
+      currentPage = 1;
+      renderTable();
+    })
+  );
+  nav.appendChild(
+    mk("Prev", currentPage === 1, () => {
+      currentPage = Math.max(1, currentPage - 1);
+      renderTable();
+    })
+  );
 
   const windowSize = 5;
   let start = Math.max(1, currentPage - Math.floor(windowSize / 2));
@@ -603,15 +684,18 @@ function drawPagination(totalPages) {
     nav.appendChild(b);
   }
 
-  nav.appendChild(mk("Next", currentPage === totalPages, () => {
-    currentPage = Math.min(totalPages, currentPage + 1);
-    renderTable();
-  }));
-
-  nav.appendChild(mk("Last", currentPage === totalPages, () => {
-    currentPage = totalPages;
-    renderTable();
-  }));
+  nav.appendChild(
+    mk("Next", currentPage === totalPages, () => {
+      currentPage = Math.min(totalPages, currentPage + 1);
+      renderTable();
+    })
+  );
+  nav.appendChild(
+    mk("Last", currentPage === totalPages, () => {
+      currentPage = totalPages;
+      renderTable();
+    })
+  );
 }
 
 /* ========== Version polling (acts ONLY on change) ========== */
