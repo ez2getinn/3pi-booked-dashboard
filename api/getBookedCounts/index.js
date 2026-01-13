@@ -1,18 +1,25 @@
 module.exports = async function (context, req) {
   try {
-    // ✅ Your GAS endpoint already returns JSON like:
-    // [ { "name": "Jan", "count": 26 }, { "name": "Feb", "count": 0 }, ... ]
-    const GAS_URL =
-      "https://script.google.com/a/macros/shift4.com/s/AKfycbxb4baiuXwUx0UGj9r79eFVhijOLN0fX3dHSbClYLeVM_AhZSW00uzntZDWGi0iMLIqyA/exec";
+    // ✅ GAS endpoint (your working web app)
+    const GAS_BASE =
+      "https://script.google.com/a/macros/shift4.com/s/AKfycbxsy7lAvTMPuZf9GW_ER4iuScDIb5vCUhJ0Rx4SA5Pu_1nXXHMSonErxfKj6bJ5T1mPZA/exec";
 
-    const res = await fetch(GAS_URL, { method: "GET" });
+    // ✅ This will return JSON like:
+    // [{ "name":"Jan","count":26 }, ...]
+    const url = `${GAS_BASE}?fn=getBookedCounts`;
+
+    const res = await fetch(url, { method: "GET" });
 
     if (!res.ok) {
       const txt = await res.text().catch(() => "");
       context.res = {
         status: 500,
         headers: { "Content-Type": "application/json" },
-        body: { error: "GAS getBookedCounts failed", status: res.status, details: txt },
+        body: {
+          error: "GAS getBookedCounts failed",
+          status: res.status,
+          details: txt,
+        },
       };
       return;
     }
@@ -31,10 +38,7 @@ module.exports = async function (context, req) {
     context.res = {
       status: 500,
       headers: { "Content-Type": "application/json" },
-      body: {
-        error: "getBookedCounts exception",
-        message: String(err?.message || err),
-      },
+      body: { error: "getBookedCounts exception", message: String(err?.message || err) },
     };
   }
 };
