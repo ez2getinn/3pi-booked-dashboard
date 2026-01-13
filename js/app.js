@@ -1,8 +1,7 @@
-
 /* ============================================================================
  * SHIFT4 Web App – JS (Azure Static Web Apps version)
  * - Converted from Apps Script client to Azure fetch() APIs
- * - All logic preserved exactly
+ * - Preserves ALL original logic
  *
  * REQUIRED API endpoints (Azure Functions):
  *   GET  /api/getSheetNames
@@ -13,7 +12,7 @@
 
 /* ========== Azure fetch wrapper ========== */
 async function apiGet(path, label = path) {
-  const url = path.startsWith("http") ? path : path;
+  const url = path;
   try {
     const res = await fetch(url, { method: "GET" });
     if (!res.ok) {
@@ -131,6 +130,7 @@ let tzInfo = { abbr: "", iana: "" };
 /* ========== Month parsing / dates ========== */
 const MONTH_RX =
   /^(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s+(\d{4}))?$/i;
+
 const MONTH_MAP = {
   jan: 0,
   feb: 1,
@@ -146,7 +146,9 @@ const MONTH_MAP = {
   nov: 10,
   dec: 11,
 };
+
 const MONTHS_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
 const MONTHS_LONG = [
   "January","February","March","April","May","June",
   "July","August","September","October","November","December"
@@ -156,7 +158,10 @@ function parseTab(name) {
   const m = MONTH_RX.exec(String(name).trim());
   if (!m) return null;
   const key = m[1].slice(0, 3).toLowerCase();
-  return { month: MONTH_MAP[key] ?? MONTH_MAP[m[1].toLowerCase()], year: m[2] ? parseInt(m[2], 10) : null };
+  return {
+    month: MONTH_MAP[key] ?? MONTH_MAP[m[1].toLowerCase()],
+    year: m[2] ? parseInt(m[2], 10) : null,
+  };
 }
 
 function endOfYear(d) {
@@ -164,11 +169,12 @@ function endOfYear(d) {
 }
 
 function pickCurrentMonthIndex(names) {
-  const now = new Date(),
-    y = now.getFullYear(),
-    m = now.getMonth();
-  const short = MONTHS_SHORT[m],
-    long = MONTHS_LONG[m];
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = now.getMonth();
+
+  const short = MONTHS_SHORT[m];
+  const long = MONTHS_LONG[m];
 
   let rx = new RegExp(`^(?:${short}|${long})\\s+${y}$`, "i");
   let i = names.findIndex((n) => rx.test(n));
@@ -184,7 +190,6 @@ document.addEventListener("DOMContentLoaded", () => {
   initCollapsibles();
 
   els.reloadBtn?.addEventListener("click", () => {
-    // Manual reload: refresh cards + table (sequential via gate)
     queueTask(async () => {
       await refreshCards();
       await reload();
@@ -197,7 +202,7 @@ document.addEventListener("DOMContentLoaded", () => {
     renderTable();
   });
 
-  // Scorecard → single-month view
+  // Scorecard click → single month view
   els.cards?.addEventListener("click", (e) => {
     const card = e.target.closest(".card[data-name]");
     if (!card) return;
@@ -214,13 +219,12 @@ document.addEventListener("DOMContentLoaded", () => {
     queueTask(() => reload());
   });
 
-  // First paint
+  // first paint
   queueTask(() => loadTabsAndFirstPaint());
 });
 
-/* ========== First paint (then start polling/heartbeat) ========== */
+/* ========== First paint (then polling/heartbeat) ========== */
 async function loadTabsAndFirstPaint() {
-  // Detect viewer timezone and render chip
   tzInfo = detectTimezone();
   ensureTzChip();
 
@@ -233,12 +237,12 @@ async function loadTabsAndFirstPaint() {
   }
 
   selectCurrentMonth();
-  await refreshCards(); // draw scorecards once
-  forceDefaultMode(); // default mode
+  await refreshCards();
+  forceDefaultMode();
   await reload();
 
-  startVersionPolling(); // act only on change
-  startCardsHeartbeat(); // 2-min light fallback
+  startVersionPolling();
+  startCardsHeartbeat();
 }
 
 function selectCurrentMonth() {
@@ -248,14 +252,14 @@ function selectCurrentMonth() {
 }
 
 /* ========== Scorecards ========== */
-let lastCardsJSON = ""; // to detect changes without extra work
+let lastCardsJSON = "";
 
 async function refreshCards() {
   const items = await apiGet("/api/getBookedCounts", "getBookedCounts").catch(() => null);
   if (!items) return;
 
   const j = JSON.stringify(items);
-  if (j === lastCardsJSON) return; // no UI work if unchanged
+  if (j === lastCardsJSON) return;
 
   lastCardsJSON = j;
   renderCards(items);
@@ -267,16 +271,15 @@ function renderCards(items) {
     els.cards.innerHTML = "";
     return;
   }
+
   els.cards.innerHTML = items
-    .map(
-      ({ name, count }) => `
-    <div class="card" data-name="${escapeHtml(name)}" title="${escapeHtml(name)}">
-      <span class="chip">BOOKED</span>
-      <div class="title">${escapeHtml(name)}</div>
-      <div class="value">${count}</div>
-    </div>
-  `
-    )
+    .map(({ name, count }) => `
+      <div class="card" data-name="${escapeHtml(name)}" title="${escapeHtml(name)}">
+        <span class="chip">BOOKED</span>
+        <div class="title">${escapeHtml(name)}</div>
+        <div class="value">${count}</div>
+      </div>
+    `)
     .join("");
 }
 
@@ -288,16 +291,14 @@ function setActiveCard(name) {
 
 /* ========== Summary label helper ========== */
 function setSummaryLabel(isDefaultMode, baseLabel, count) {
-  const label = isDefaultMode
-    ? `${baseLabel}: ${count} “BOOKED”`
-    : `${baseLabel}: ${count} “BOOKED”`;
+  const label = `${baseLabel}: ${count} “BOOKED”`;
   els.status.innerHTML = `<strong>${escapeHtml(label)}</strong>`;
 }
 
 /* ========== Mode helpers ========== */
 function forceDefaultMode() {
   defaultMode = true;
-  selectCurrentMonth(); // anchor month for this year
+  selectCurrentMonth();
   fromTodayLowerBound = true;
   toEndOfYearUpperBound = endOfYear(new Date());
 }
@@ -307,6 +308,7 @@ function resetViewState() {
   els.tbody && (els.tbody.innerHTML = "");
   els.emptyState && (els.emptyState.style.display = "none");
   els.pagination && (els.pagination.innerHTML = "");
+
   currentRows = [];
   currentRowsMs = [];
   currentPage = 1;
@@ -316,12 +318,15 @@ function resetViewState() {
 
 /* ========== Reload paths ========== */
 async function reload() {
-  const monthlyOpen = document.getElementById("panel-monthly")?.classList.contains("open");
-  if (!monthlyOpen) forceDefaultMode(); // safety
+  const monthlyOpen = document
+    .getElementById("panel-monthly")
+    ?.classList.contains("open");
+
+  if (!monthlyOpen) forceDefaultMode();
   return defaultMode ? reloadDefaultRange() : reloadSingleMonth(activeMonthName);
 }
 
-// Scorecard (single month)
+// Single month view
 async function reloadSingleMonth(tab) {
   if (!tab) return;
   resetViewState();
@@ -338,19 +343,18 @@ async function reloadSingleMonth(tab) {
   drawHeader(currentHeaders);
   renderTable();
 
-  // Summary for single month
-  setSummaryLabel(false, `${tab}`, currentRows.length);
+  setSummaryLabel(false, tab, currentRows.length);
   setActiveCard(tab);
 }
 
-// Default (Today → Dec 31) across remaining months (SEQUENTIAL fetch; low-traffic)
+// Default range view (today→Dec 31)
 async function reloadDefaultRange() {
   if (!monthTabs.length) return;
   resetViewState();
 
-  const now = new Date(),
-    y = now.getFullYear(),
-    m = now.getMonth();
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = now.getMonth();
 
   const wanted = monthTabs.filter((n) => {
     const p = parseTab(n);
@@ -375,6 +379,7 @@ async function reloadDefaultRange() {
       currentHeaders = d.headers;
       headersPicked = true;
     }
+
     if (Array.isArray(d.rows)) currentRows.push(...d.rows);
     if (Array.isArray(d.ms)) currentRowsMs.push(...d.ms);
   }
@@ -385,10 +390,9 @@ async function reloadDefaultRange() {
   drawHeader(currentHeaders);
   renderTable();
 
-  // Summary for default range (e.g., "Sep–Dec")
   const label = `${MONTHS_SHORT[m]}–Dec`;
   const totalInWindow = applyDateWindow(currentRows, currentRowsMs).length;
-  setSummaryLabel(true, `${label}`, totalInWindow);
+  setSummaryLabel(true, label, totalInWindow);
 }
 
 /* ========== Table rendering (sort/paginate) ========== */
@@ -397,14 +401,12 @@ function drawHeader(headers) {
   els.thead.innerHTML = "";
   const tr = document.createElement("tr");
 
-  const shortTz = tzInfo?.abbr || ""; // e.g., "PDT" or "GMT-7"
+  const shortTz = tzInfo?.abbr || "";
 
   (headers || []).forEach((h, idx) => {
     let label = String(h ?? "");
 
-    // For Start/End Time columns, append short TZ (e.g., "(PDT)")
     if ((idx === START_COL_INDEX || idx === END_COL_INDEX) && shortTz) {
-      // Avoid double-appending if header already contains a TZ
       if (
         !/\(\s*[A-Za-z]{2,5}\s*\)$/i.test(label) &&
         !/\(GMT[+-]\d{1,2}(?::\d{2})?\)$/i.test(label)
@@ -443,7 +445,6 @@ function updateHeaderState() {
   });
 }
 
-// Date-window uses raw ms aligned with rows
 function applyDateWindow(rows, rowsMs) {
   if (!Array.isArray(rows) || !Array.isArray(rowsMs) || rows.length !== rowsMs.length)
     return [];
@@ -460,11 +461,10 @@ function applyDateWindow(rows, rowsMs) {
     if (ms == null) continue;
     if (ms >= t0 && ms <= t1) items.push({ row: rows[i], ms: rowsMs[i], idx: i });
   }
-  return items; // [{row, ms, idx}]
+  return items;
 }
 
 function renderTable() {
-  // Build items (row + ms)
   let items;
   if (defaultMode) {
     items = applyDateWindow(currentRows, currentRowsMs);
@@ -476,33 +476,33 @@ function renderTable() {
     }));
   }
 
-  // sort
   items.sort((a, b) => {
-    const va = a.row[sortCol],
-      vb = b.row[sortCol];
+    const va = a.row[sortCol];
+    const vb = b.row[sortCol];
 
-    // Date column: sort by raw epoch dateMs
+    // Date col
     if (sortCol === DATE_COL_INDEX) {
       const ta = a.ms?.dateMs ?? -Infinity;
       const tb = b.ms?.dateMs ?? -Infinity;
       return sortDir === "asc" ? ta - tb : tb - ta;
     }
 
-    // Start/End time columns: sort by startMs/endMs; tie-break by dateMs
+    // Start/End time
     if (sortCol === START_COL_INDEX || sortCol === END_COL_INDEX) {
       const key = sortCol === START_COL_INDEX ? "startMs" : "endMs";
       const ta = a.ms?.[key] ?? -Infinity;
       const tb = b.ms?.[key] ?? -Infinity;
       if (ta !== tb) return sortDir === "asc" ? ta - tb : tb - ta;
 
-      const da = a.ms?.dateMs ?? -Infinity,
-        db = b.ms?.dateMs ?? -Infinity;
+      const da = a.ms?.dateMs ?? -Infinity;
+      const db = b.ms?.dateMs ?? -Infinity;
       return sortDir === "asc" ? da - db : db - da;
     }
 
-    // Generic textual/number compare for other cols
-    const na = Number(va),
-      nb = Number(vb);
+    // Generic compare
+    const na = Number(va);
+    const nb = Number(vb);
+
     const both =
       !Number.isNaN(na) &&
       !Number.isNaN(nb) &&
@@ -520,7 +520,6 @@ function renderTable() {
     return sortDir === "asc" ? cmp : -cmp;
   });
 
-  // paginate
   const total = items.length;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   currentPage = Math.min(Math.max(1, currentPage), totalPages);
@@ -538,9 +537,9 @@ function renderTable() {
 
     pageItems.forEach(({ row, ms }) => {
       const tr = document.createElement("tr");
-
-      // clone row & override Date/Start/End with local formatted values
       const cells = row.slice();
+
+      // local render
       cells[DATE_COL_INDEX] = fmtLocalDate(ms?.dateMs ?? null);
       cells[START_COL_INDEX] = fmtLocalTime(ms?.startMs ?? null);
       cells[END_COL_INDEX] = fmtLocalTime(ms?.endMs ?? null);
@@ -550,6 +549,7 @@ function renderTable() {
         td.textContent = cell == null ? "" : String(cell);
         tr.appendChild(td);
       });
+
       frag.appendChild(tr);
     });
 
@@ -610,7 +610,7 @@ function drawPagination(totalPages) {
 }
 
 /* ========== Version polling (acts ONLY on change) ========== */
-const POLL_MS = 60 * 1000; // 1 minute
+const POLL_MS = 60 * 1000;
 let lastVersion = null;
 let pollTimer = null;
 
@@ -632,7 +632,6 @@ function startVersionPolling() {
 
     if (v !== lastVersion) {
       lastVersion = v;
-      // Data changed → refresh cards and snap to Default view
       queueTask(async () => {
         await refreshCards();
         forceDefaultMode();
@@ -642,8 +641,8 @@ function startVersionPolling() {
   }, POLL_MS);
 }
 
-/* ========== Card heartbeat (fallback if version doesn't change) ========== */
-const CARDS_HEARTBEAT_MS = 120 * 1000; // 2 minutes
+/* ========== Card heartbeat (fallback) ========== */
+const CARDS_HEARTBEAT_MS = 120 * 1000;
 let cardsTimer = null;
 
 function startCardsHeartbeat() {
@@ -651,9 +650,8 @@ function startCardsHeartbeat() {
     if (netBusy) return;
     queueTask(async () => {
       const prev = lastCardsJSON;
-      await refreshCards(); // updates lastCardsJSON & DOM if changed
+      await refreshCards();
       if (lastCardsJSON !== prev) {
-        // counts changed → ensure default table reflects it
         forceDefaultMode();
         await reload();
       }
@@ -674,7 +672,6 @@ function escapeHtml(str) {
   );
 }
 
-// Local formatters for date/time using the viewer's locale/timezone
 function fmtLocalDate(ms) {
   if (ms == null) return "";
   const d = new Date(ms);
@@ -694,9 +691,9 @@ function fmtLocalTime(ms) {
   }).format(d);
 }
 
-// --- Timezone helpers ---
+/* ========== Timezone helpers ========== */
 function gmtOffsetAbbr(d = new Date()) {
-  const offMin = -d.getTimezoneOffset(); // PDT: -420 -> GMT-7
+  const offMin = -d.getTimezoneOffset();
   const sign = offMin >= 0 ? "+" : "-";
   const abs = Math.abs(offMin);
   const hh = Math.floor(abs / 60);
