@@ -11,6 +11,11 @@
  * ========================================================================== */
 
 /* ========== Azure fetch wrapper ========== */
+
+const GAS_BASE =
+  "https://script.google.com/a/macros/shift4.com/s/AKfycbxb4baiuXwUx0UGj9r79eFVhijOLN0fX3dHSbClYLeVM_AhZSW00uzntZDWGi0iMLIqyA/exec";
+
+
 async function apiGet(path, label = path) {
   const url = path;
   try {
