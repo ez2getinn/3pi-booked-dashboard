@@ -1,7 +1,6 @@
 <!DOCTYPE html>
 <html>
   <head>
-    <base target="_top">
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
 
@@ -12,8 +11,6 @@
   <body>
     <!-- ✅ Session ID replacement (static fallback) -->
     <script>
-      // In Apps Script this was injected server-side.
-      // In Azure static site we generate it client-side.
       window.SESSION_ID =
         (crypto && crypto.randomUUID && crypto.randomUUID()) ||
         ("sess_" + Date.now() + "_" + Math.random().toString(16).slice(2));
@@ -31,13 +28,12 @@
     </div>
 
     <div class="app">
-
       <!-- Branded header bar -->
       <section class="brand-topbar">
         <!-- ✅ Left Logo -->
         <div id="leftLogoContainer">
           <img
-            src="https://drive.google.com/uc?export=view&id=16jYqQpL1HW_Xn4NSPt5L3inx0mlJmqaC"
+            src="/assets/logo.png"
             alt="Main Logo"
             class="left-logo"
           />
@@ -62,26 +58,43 @@
            ================================ -->
 
       <!-- Collapsible 1: MONTHLY BREAKDOWN — Scorecards only (CLOSED by default) -->
-      <button class="sf4-collapse-btn" type="button"
-              aria-expanded="false" aria-controls="panel-monthly">
+      <button
+        class="sf4-collapse-btn"
+        type="button"
+        aria-expanded="false"
+        aria-controls="panel-monthly"
+      >
         <span class="sf4-collapse-title">MONTHLY BREAKDOWN</span>
         <span class="sf4-collapse-chevron" aria-hidden="true">▾</span>
       </button>
 
-      <section id="panel-monthly" class="collapse-panel" role="region" aria-hidden="true">
+      <section
+        id="panel-monthly"
+        class="collapse-panel"
+        role="region"
+        aria-hidden="true"
+      >
         <!-- SCORECARDS -->
         <section id="cards" class="cards"></section>
       </section>
 
       <!-- Collapsible 2: YEARLY DATA — Open by default -->
-      <button class="sf4-collapse-btn open" type="button"
-              aria-expanded="true" aria-controls="panel-yearly">
+      <button
+        class="sf4-collapse-btn open"
+        type="button"
+        aria-expanded="true"
+        aria-controls="panel-yearly"
+      >
         <span class="sf4-collapse-title">YEARLY DATA</span>
         <span class="sf4-collapse-chevron" aria-hidden="true">▾</span>
       </button>
 
-      <section id="panel-yearly" class="collapse-panel open" role="region" aria-hidden="false">
-
+      <section
+        id="panel-yearly"
+        class="collapse-panel open"
+        role="region"
+        aria-hidden="false"
+      >
         <header class="app-header">
           <div class="controls">
             <label for="pageSize">Rows per page:</label>
@@ -104,7 +117,7 @@
             <tbody id="tableBody"></tbody>
           </table>
 
-          <div id="emptyState" class="empty-state" style="display:none;">
+          <div id="emptyState" class="empty-state" style="display: none">
             No “BOOKED” rows (or no matches to your search).
           </div>
         </section>
