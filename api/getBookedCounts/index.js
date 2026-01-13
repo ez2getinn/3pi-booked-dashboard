@@ -1,44 +1,88 @@
+// api/getBookedCounts/index.js
+// Reads BOOKED counts from your Google Apps Script Web App endpoint
+// Returns: [{ name: "Jan", count: 26 }, ...] (JSON)
+
+// ✅ PUT YOUR GAS WEB APP URL HERE (must return JSON array)
+const GAS_GET_BOOKED_COUNTS_URL =
+  "https://script.google.com/a/macros/shift4.com/s/AKfycbxb4baiuXwUx0UGj9r79eFVhijOLN0fX3dHSbClYLeVM_AhZSW00uzntZDWGi0iMLIqyA/exec";
+
 module.exports = async function (context, req) {
   try {
-    // ✅ GAS endpoint (your working web app)
-    const GAS_BASE =
-      "https://script.google.com/a/macros/shift4.com/s/AKfycbxsy7lAvTMPuZf9GW_ER4iuScDIb5vCUhJ0Rx4SA5Pu_1nXXHMSonErxfKj6bJ5T1mPZA/exec";
+    // Call GAS endpoint
+    const res = await fetch(GAS_GET_BOOKED_COUNTS_URL, {
+      method: "GET",
+      headers: {
+        "Accept": "application/json",
+      },
+    });
 
-    // ✅ This will return JSON like:
-    // [{ "name":"Jan","count":26 }, ...]
-    const url = `${GAS_BASE}?fn=getBookedCounts`;
+    const text = await res.text();
 
-    const res = await fetch(url, { method: "GET" });
-
+    // If GAS returns an HTML login page, this will catch it
     if (!res.ok) {
-      const txt = await res.text().catch(() => "");
       context.res = {
         status: 500,
         headers: { "Content-Type": "application/json" },
         body: {
-          error: "GAS getBookedCounts failed",
-          status: res.status,
-          details: txt,
+          error: "getBookedCounts exception",
+          message: `GAS returned HTTP ${res.status}`,
+          preview: text.slice(0, 200),
         },
       };
       return;
     }
 
-    const data = await res.json();
+    // Parse JSON
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch (e) {
+      context.res = {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+        body: {
+          error: "getBookedCounts exception",
+          message: `Unexpected token in response. Not valid JSON.`,
+          preview: text.slice(0, 200),
+        },
+      };
+      return;
+    }
+
+    // Must be an array like: [{name,count}, ...]
+    if (!Array.isArray(data)) {
+      context.res = {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+        body: {
+          error: "getBookedCounts exception",
+          message: "GAS response is not an array",
+          receivedType: typeof data,
+          received: data,
+        },
+      };
+      return;
+    }
+
+    // Clean/normalize
+    const cleaned = data.map((x) => ({
+      name: String(x?.name ?? "").trim(),
+      count: Number(x?.count ?? 0) || 0,
+    }));
 
     context.res = {
       status: 200,
-      headers: {
-        "Content-Type": "application/json",
-        "Cache-Control": "no-store",
-      },
-      body: data,
+      headers: { "Content-Type": "application/json" },
+      body: cleaned,
     };
   } catch (err) {
     context.res = {
       status: 500,
       headers: { "Content-Type": "application/json" },
-      body: { error: "getBookedCounts exception", message: String(err?.message || err) },
+      body: {
+        error: "getBookedCounts exception",
+        message: String(err?.message || err),
+      },
     };
   }
 };
