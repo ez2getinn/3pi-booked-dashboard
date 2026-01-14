@@ -1,13 +1,24 @@
 /* ============================================================================
- * 3PI BOOKED DASHBOARD (Azure Static Web Apps)
+ * 3PI BOOKED DASHBOARD – FRONTEND (Azure Static Web Apps)
  *
- * API Endpoints:
+ * APIs REQUIRED:
  *   ✅ /api/getSheetNames
  *   ✅ /api/getSheetData?sheet=NAME
  *   ✅ /api/getBookedCounts
  *
- * Table Output Columns (EXACT ORDER):
+ * TABLE COLUMNS (EXACT ORDER):
  *   Email | Name | Date | Start Time | End Time | BOOKED | Site | Account | Ticket | Shift4 MID
+ *
+ * DEFAULT PAGE LOAD BEHAVIOR:
+ *   ✅ Auto-pick current month sheet (Jan, Feb, Mar...)
+ *   ✅ Show only rows from TODAY → end of that month
+ *
+ * SCORECARD BEHAVIOR:
+ *   ✅ Shows totals per month from /api/getBookedCounts
+ *   ✅ Clicking a month loads full month (no date filter)
+ *
+ * TIMEZONE:
+ *   ✅ Always display in VIEWER'S timezone (EST/PST/MDT/etc)
  * ========================================================================== */
 
 /* =========================
@@ -38,44 +49,10 @@ async function apiGet(path, label = path) {
 }
 
 /* =========================
-   Collapsibles
-   ========================= */
-function setOpen(btn, panel, open) {
-  btn.classList.toggle("open", open);
-  btn.setAttribute("aria-expanded", String(open));
-  panel.classList.toggle("open", open);
-  panel.setAttribute("aria-hidden", String(!open));
-}
-
-function initCollapsibles() {
-  document.querySelectorAll(".sf4-collapse-btn").forEach((btn) => {
-    const id = btn.getAttribute("aria-controls");
-    const panel = document.getElementById(id);
-    if (!panel) return;
-
-    const initialOpen =
-      btn.classList.contains("open") ||
-      btn.getAttribute("aria-expanded") === "true";
-
-    setOpen(btn, panel, initialOpen);
-
-    btn.addEventListener("click", () => {
-      const nowOpen = !btn.classList.contains("open");
-      setOpen(btn, panel, nowOpen);
-
-      // If MONTHLY collapses, go back to default month (Jan)
-      if (id === "panel-monthly" && !nowOpen) {
-        forceDefaultMonth();
-        queueTask(() => reloadSelectedMonth());
-      }
-    });
-  });
-}
-
-/* =========================
-   Loader
+   Loader overlay
    ========================= */
 let pendingLoads = 0;
+
 function showLoader() {
   pendingLoads++;
   document.getElementById("loaderOverlay")?.classList.remove("hidden");
@@ -103,7 +80,42 @@ function queueTask(fn) {
       netBusy = false;
       hideLoader();
     }
-  }, 100);
+  }, 120);
+}
+
+/* =========================
+   Collapsibles
+   ========================= */
+function setOpen(btn, panel, open) {
+  btn.classList.toggle("open", open);
+  btn.setAttribute("aria-expanded", String(open));
+  panel.classList.toggle("open", open);
+  panel.setAttribute("aria-hidden", String(!open));
+}
+
+function initCollapsibles() {
+  document.querySelectorAll(".sf4-collapse-btn").forEach((btn) => {
+    const id = btn.getAttribute("aria-controls");
+    const panel = document.getElementById(id);
+    if (!panel) return;
+
+    const initialOpen =
+      btn.classList.contains("open") ||
+      btn.getAttribute("aria-expanded") === "true";
+
+    setOpen(btn, panel, initialOpen);
+
+    btn.addEventListener("click", () => {
+      const nowOpen = !btn.classList.contains("open");
+      setOpen(btn, panel, nowOpen);
+
+      // If MONTHLY collapses -> return to default view
+      if (id === "panel-monthly" && !nowOpen) {
+        forceDefaultMode();
+        queueTask(() => reloadDefault());
+      }
+    });
+  });
 }
 
 /* =========================
@@ -120,21 +132,10 @@ const els = {
   cards: document.getElementById("cards"),
 };
 
-let monthTabs = [];
-let activeMonthName = null;
-
-// pagination/sort
-let pageSize = (els.pageSize && parseInt(els.pageSize.value, 10)) || 15;
-let currentPage = 1;
-let sortCol = 2; // default sort by Date
-let sortDir = "asc";
-
-// timezone chip
-let tzInfo = { abbr: "", iana: "" };
-
 /* =========================
-   Column mapping (from Excel sheet)
-   Your sheet (from screenshot):
+   Sheet column mapping (Excel)
+   =========================
+   From your screenshot:
    A: Date
    B: Title
    C: Description
@@ -147,12 +148,10 @@ let tzInfo = { abbr: "", iana: "" };
    J: Account
    K: Ticket
    L: Shift4 MID
-   ========================= */
+*/
 const COL_DATE = 0;
-const COL_TITLE = 1;
-const COL_DESC = 2;
 const COL_EMAIL = 3;
-const COL_NAME = 4;       // Work (B)
+const COL_NAME = 4;
 const COL_START = 5;
 const COL_END = 6;
 const COL_BOOKED = 7;
@@ -161,19 +160,44 @@ const COL_ACCOUNT = 9;
 const COL_TICKET = 10;
 const COL_MID = 11;
 
-// output columns required (EXACT ORDER)
+/* ✅ Output columns REQUIRED */
 const OUT_COLS = [
-  { key: "Email",     src: COL_EMAIL },
-  { key: "Name",      src: COL_NAME },
-  { key: "Date",      src: COL_DATE },
-  { key: "Start Time",src: COL_START },
-  { key: "End Time",  src: COL_END },
-  { key: "BOOKED",    src: COL_BOOKED },
-  { key: "Site",      src: COL_SITE },
-  { key: "Account",   src: COL_ACCOUNT },
-  { key: "Ticket",    src: COL_TICKET },
-  { key: "Shift4 MID",src: COL_MID },
+  { key: "Email", src: COL_EMAIL },
+  { key: "Name", src: COL_NAME },
+  { key: "Date", src: COL_DATE },
+  { key: "Start Time", src: COL_START },
+  { key: "End Time", src: COL_END },
+  { key: "BOOKED", src: COL_BOOKED },
+  { key: "Site", src: COL_SITE },
+  { key: "Account", src: COL_ACCOUNT },
+  { key: "Ticket", src: COL_TICKET },
+  { key: "Shift4 MID", src: COL_MID },
 ];
+
+/* =========================
+   Timezone display state
+   ========================= */
+let tzInfo = { abbr: "", iana: "" };
+
+/* =========================
+   App state
+   ========================= */
+let monthTabs = [];
+let activeMonthName = null;
+
+// default mode = current month + Today->end of month filter
+let defaultMode = true;
+
+// table state
+let displayRowsCurrent = [];
+let currentPage = 1;
+let pageSize = (els.pageSize && parseInt(els.pageSize.value, 10)) || 15;
+let sortCol = 2; // Date
+let sortDir = "asc";
+
+// used for default filter window
+let filterStartMs = null;
+let filterEndMs = null;
 
 /* =========================
    Boot
@@ -187,7 +211,7 @@ document.addEventListener("DOMContentLoaded", () => {
   els.reloadBtn?.addEventListener("click", () => {
     queueTask(async () => {
       await refreshCards();
-      await reloadSelectedMonth();
+      await reloadDefault();
     });
   });
 
@@ -197,7 +221,7 @@ document.addEventListener("DOMContentLoaded", () => {
     renderTable();
   });
 
-  // clicking scorecard loads that month
+  // Scorecard click -> load full month
   els.cards?.addEventListener("click", (e) => {
     const card = e.target.closest(".card[data-name]");
     if (!card) return;
@@ -206,36 +230,80 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!monthTabs.includes(name)) return;
 
     activeMonthName = name;
-    setActiveCard(name);
-    queueTask(() => reloadSelectedMonth());
+    defaultMode = false;
+
+    setActiveCard(activeMonthName);
+    queueTask(() => reloadSingleMonth(activeMonthName));
   });
 
-  // first load
   queueTask(() => loadTabsAndFirstPaint());
 });
 
 /* =========================
-   Load tabs + default month
+   Load tabs + first paint
    ========================= */
 async function loadTabsAndFirstPaint() {
-  const names = await apiGet("/api/getSheetNames", "getSheetNames").catch(() => []);
-  monthTabs = Array.isArray(names) ? names.slice() : [];
+  monthTabs = await apiGet("/api/getSheetNames", "getSheetNames")
+    .then((x) => (Array.isArray(x) ? x : []))
+    .catch(() => []);
 
   if (!monthTabs.length) {
     setStatusLabel("No months found", 0);
     return;
   }
 
-  // Default to Jan ALWAYS (if exists)
-  activeMonthName = monthTabs.includes("Jan") ? "Jan" : monthTabs[0];
+  // pick current month tab
+  activeMonthName = pickCurrentMonthTab(monthTabs);
 
+  // default mode on load
+  forceDefaultMode();
+
+  // load scorecards
   await refreshCards();
-  setActiveCard(activeMonthName);
-  await reloadSelectedMonth();
+
+  // load default view
+  await reloadDefault();
 }
 
-function forceDefaultMonth() {
-  activeMonthName = monthTabs.includes("Jan") ? "Jan" : monthTabs[0];
+/* =========================
+   Default month pick
+   ========================= */
+const MONTHS_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+function pickCurrentMonthTab(names) {
+  const now = new Date();
+  const currentShort = MONTHS_SHORT[now.getMonth()];
+
+  // Exact match "Jan"
+  if (names.includes(currentShort)) return currentShort;
+
+  // case-insensitive
+  const i = names.findIndex((n) => String(n).trim().toLowerCase() === currentShort.toLowerCase());
+  if (i >= 0) return names[i];
+
+  // fallback first
+  return names[0];
+}
+
+function endOfMonth(d) {
+  return new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
+}
+
+function forceDefaultMode() {
+  defaultMode = true;
+
+  // Ensure we always have a month selected
+  if (!activeMonthName) activeMonthName = pickCurrentMonthTab(monthTabs);
+
+  const now = new Date();
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+
+  const end = endOfMonth(now);
+
+  filterStartMs = start.getTime();
+  filterEndMs = end.getTime();
+
   setActiveCard(activeMonthName);
 }
 
@@ -245,40 +313,52 @@ function forceDefaultMonth() {
 let lastCardsJSON = "";
 
 async function refreshCards() {
-  const items = await apiGet("/api/getBookedCounts", "getBookedCounts").catch((err) => {
-    console.error("getBookedCounts failed:", err);
-    els.cards.innerHTML =
-      `<div style="padding:10px;color:#b91c1c;font-weight:900;">Failed to load monthly scorecards</div>`;
-    return null;
-  });
+  els.cards.innerHTML = ""; // clear
 
-  if (!items) return;
-
-  const j = JSON.stringify(items);
-  if (j === lastCardsJSON) return;
-
-  lastCardsJSON = j;
-  renderCards(items);
-  setActiveCard(activeMonthName);
-}
-
-function renderCards(items) {
-  if (!Array.isArray(items)) {
-    els.cards.innerHTML = "";
+  let items;
+  try {
+    items = await apiGet("/api/getBookedCounts", "getBookedCounts");
+  } catch (err) {
+    console.error("Scorecards failed:", err);
+    els.cards.innerHTML = `
+      <div style="padding:10px;color:#b91c1c;font-weight:900;">
+        Failed to load monthly scorecards<br/>
+        <span style="font-weight:600;font-size:12px;color:#64748b;">
+          Check /api/getBookedCounts is deployed + returning JSON
+        </span>
+      </div>
+    `;
     return;
   }
 
+  if (!Array.isArray(items)) {
+    els.cards.innerHTML = `
+      <div style="padding:10px;color:#b91c1c;font-weight:900;">
+        Scorecards API returned invalid data
+      </div>
+    `;
+    return;
+  }
+
+  // prevent re-render spam
+  const j = JSON.stringify(items);
+  if (j === lastCardsJSON) {
+    setActiveCard(activeMonthName);
+    return;
+  }
+  lastCardsJSON = j;
+
   els.cards.innerHTML = items
-    .map(({ name, count }) => {
-      return `
-        <div class="card" data-name="${escapeHtml(name)}" title="${escapeHtml(name)}">
-          <span class="chip">BOOKED</span>
-          <div class="title">${escapeHtml(name)}</div>
-          <div class="value">${Number(count || 0)}</div>
-        </div>
-      `;
-    })
+    .map(({ name, count }) => `
+      <div class="card" data-name="${escapeHtml(name)}" title="${escapeHtml(name)}">
+        <span class="chip">BOOKED</span>
+        <div class="title">${escapeHtml(name)}</div>
+        <div class="value">${Number(count || 0)}</div>
+      </div>
+    `)
     .join("");
+
+  setActiveCard(activeMonthName);
 }
 
 function setActiveCard(name) {
@@ -288,53 +368,172 @@ function setActiveCard(name) {
 }
 
 /* =========================
-   Reload month sheet
+   Reload handlers
    ========================= */
-let rawRows = [];
-
-async function reloadSelectedMonth() {
+async function reloadDefault() {
   if (!activeMonthName) return;
 
   resetTableState();
 
+  // default = current month filtered by today->end-of-month
   const payload = await apiGet(
     `/api/getSheetData?sheet=${encodeURIComponent(activeMonthName)}`,
     `getSheetData:${activeMonthName}`
-  ).catch((err) => {
-    console.error("getSheetData failed:", err);
-    return { headers: [], rows: [] };
+  ).catch(() => ({ rows: [] }));
+
+  const rawRows = Array.isArray(payload.rows) ? payload.rows : [];
+
+  // build display rows
+  const allRows = mapRowsForDisplay(rawRows);
+
+  // filter today -> end of month using date column
+  const filtered = allRows.filter((r) => {
+    const ms = r.__dateMs;
+    if (!Number.isFinite(ms)) return false;
+    return ms >= filterStartMs && ms <= filterEndMs;
   });
 
-  rawRows = Array.isArray(payload.rows) ? payload.rows : [];
+  // store
+  displayRowsCurrent = filtered.map((r) => r.display);
 
-  // Build display headers + display rows
-  const displayHeaders = OUT_COLS.map((c) => c.key);
+  // header
+  drawHeader(OUT_COLS.map((c) => c.key));
 
-  const displayRows = rawRows.map((row) => {
-    return OUT_COLS.map((c) => {
-      const v = row?.[c.src];
+  // render
+  setStatusLabel(`${activeMonthName} (Today → End of Month)`, displayRowsCurrent.length);
+  renderTable();
+}
 
-      // Date formatting
-      if (c.key === "Date") return normalizeDateCell(v);
+async function reloadSingleMonth(tab) {
+  if (!tab) return;
 
-      // Start/End formatting
-      if (c.key === "Start Time") return normalizeTimeCell(v);
-      if (c.key === "End Time") return normalizeTimeCell(v);
+  resetTableState();
 
-      return v == null ? "" : String(v);
-    });
-  });
+  const payload = await apiGet(
+    `/api/getSheetData?sheet=${encodeURIComponent(tab)}`,
+    `getSheetData:${tab}`
+  ).catch(() => ({ rows: [] }));
 
-  setStatusLabel(activeMonthName, displayRows.length);
-  drawHeader(displayHeaders);
-  renderTable(displayRows);
+  const rawRows = Array.isArray(payload.rows) ? payload.rows : [];
+
+  // map for display (no filter)
+  const allRows = mapRowsForDisplay(rawRows);
+  displayRowsCurrent = allRows.map((r) => r.display);
+
+  drawHeader(OUT_COLS.map((c) => c.key));
+
+  setStatusLabel(`${tab} (Full Month)`, displayRowsCurrent.length);
+  renderTable();
 }
 
 /* =========================
-   Table rendering
+   Row mapping + formatting
    ========================= */
-let displayRowsCurrent = [];
+function mapRowsForDisplay(rawRows) {
+  return rawRows.map((row) => {
+    const dateMs = excelCellToDateMs(row?.[COL_DATE]);
 
+    const display = OUT_COLS.map((c) => {
+      const v = row?.[c.src];
+
+      if (c.key === "Date") return dateMs ? fmtLocalDate(dateMs) : "";
+
+      if (c.key === "Start Time") {
+        const tms = excelCellToTimeMs(v);
+        return tms ? fmtLocalTime(tms) : "";
+      }
+
+      if (c.key === "End Time") {
+        const tms = excelCellToTimeMs(v);
+        return tms ? fmtLocalTime(tms) : "";
+      }
+
+      return v == null ? "" : String(v);
+    });
+
+    return { display, __dateMs: dateMs };
+  });
+}
+
+/* Convert Excel Date cell to ms
+   Handles:
+   - Excel serial date number (example: 46034)
+   - JS date string "1/14/2026" etc
+*/
+function excelCellToDateMs(v) {
+  if (v == null) return null;
+
+  // Excel serial date
+  if (typeof v === "number" && Number.isFinite(v)) {
+    // Excel serial date -> JS ms
+    return Math.round((v - 25569) * 86400 * 1000);
+  }
+
+  const s = String(v).trim();
+  if (!s) return null;
+
+  const parsed = Date.parse(s);
+  if (!Number.isNaN(parsed)) return parsed;
+
+  return null;
+}
+
+/* Convert Excel time cell to ms (time-of-day only)
+   Handles:
+   - Excel serial datetime number (example: 46031.5833333)
+   - "18:00"
+   - "9:30 AM"
+*/
+function excelCellToTimeMs(v) {
+  if (v == null) return null;
+
+  // Excel numeric date/time: fractional part is time
+  if (typeof v === "number" && Number.isFinite(v)) {
+    const frac = v - Math.floor(v);
+    const minutes = Math.round(frac * 24 * 60);
+
+    const hh = Math.floor(minutes / 60);
+    const mm = minutes % 60;
+
+    const d = new Date();
+    d.setHours(hh, mm, 0, 0);
+    return d.getTime();
+  }
+
+  const s = String(v).trim();
+  if (!s) return null;
+
+  // "18:00"
+  const hm = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(s);
+  if (hm) {
+    const hh = parseInt(hm[1], 10);
+    const mm = parseInt(hm[2], 10);
+    const d = new Date();
+    d.setHours(hh, mm, 0, 0);
+    return d.getTime();
+  }
+
+  // "9:30 AM"
+  const ampm = /^(\d{1,2}):(\d{2})\s*(am|pm)$/i.exec(s);
+  if (ampm) {
+    let hh = parseInt(ampm[1], 10);
+    const mm = parseInt(ampm[2], 10);
+    const ap = ampm[3].toLowerCase();
+
+    if (ap === "pm" && hh !== 12) hh += 12;
+    if (ap === "am" && hh === 12) hh = 0;
+
+    const d = new Date();
+    d.setHours(hh, mm, 0, 0);
+    return d.getTime();
+  }
+
+  return null;
+}
+
+/* =========================
+   Table render
+   ========================= */
 function resetTableState() {
   displayRowsCurrent = [];
   currentPage = 1;
@@ -348,6 +547,7 @@ function resetTableState() {
 }
 
 function setStatusLabel(label, count) {
+  if (!els.status) return;
   els.status.innerHTML = `<strong>${escapeHtml(`${label}: ${count} “BOOKED”`)}</strong>`;
 }
 
@@ -360,7 +560,7 @@ function drawHeader(headers) {
   headers.forEach((h, idx) => {
     let label = String(h);
 
-    // Append timezone to Start/End headers
+    // add tz to Start/End header names
     if ((label === "Start Time" || label === "End Time") && tzInfo?.abbr) {
       label = `${label} (${tzInfo.abbr})`;
     }
@@ -395,30 +595,29 @@ function updateHeaderState() {
   });
 }
 
-function renderTable(incomingRows) {
-  if (Array.isArray(incomingRows)) displayRowsCurrent = incomingRows;
-
+function renderTable() {
   const rows = displayRowsCurrent.slice();
 
-  // Sort: special case Date column (index 2)
+  // Sort logic:
+  // col 2 Date, col 3 Start, col 4 End
   rows.sort((a, b) => {
     const va = a?.[sortCol] ?? "";
     const vb = b?.[sortCol] ?? "";
 
-    // Date sort (col 2)
     if (sortCol === 2) {
-      const ta = parseDateToMs(va);
-      const tb = parseDateToMs(vb);
+      const ta = Date.parse(String(va)) || -Infinity;
+      const tb = Date.parse(String(vb)) || -Infinity;
       return sortDir === "asc" ? ta - tb : tb - ta;
     }
 
-    // Start time (col 3) / End time (col 4) sort
+    // Start Time / End Time sort (best-effort)
     if (sortCol === 3 || sortCol === 4) {
       const ta = parseTimeToMinutes(va);
       const tb = parseTimeToMinutes(vb);
       return sortDir === "asc" ? ta - tb : tb - ta;
     }
 
+    // numeric fallback
     const na = Number(va);
     const nb = Number(vb);
 
@@ -439,6 +638,7 @@ function renderTable(incomingRows) {
     return sortDir === "asc" ? cmp : -cmp;
   });
 
+  // Pagination
   const total = rows.length;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   currentPage = Math.min(Math.max(1, currentPage), totalPages);
@@ -484,18 +684,13 @@ function drawPagination(totalPages) {
     return b;
   };
 
-  nav.appendChild(
-    mk("First", currentPage === 1, () => {
-      currentPage = 1;
-      renderTable();
-    })
-  );
-  nav.appendChild(
-    mk("Prev", currentPage === 1, () => {
-      currentPage = Math.max(1, currentPage - 1);
-      renderTable();
-    })
-  );
+  nav.appendChild(mk("First", currentPage === 1, () => {
+    currentPage = 1; renderTable();
+  }));
+
+  nav.appendChild(mk("Prev", currentPage === 1, () => {
+    currentPage = Math.max(1, currentPage - 1); renderTable();
+  }));
 
   const windowSize = 5;
   let start = Math.max(1, currentPage - Math.floor(windowSize / 2));
@@ -507,109 +702,22 @@ function drawPagination(totalPages) {
     b.textContent = String(p);
     b.className = "page-num" + (p === currentPage ? " active" : "");
     b.addEventListener("click", () => {
-      currentPage = p;
-      renderTable();
+      currentPage = p; renderTable();
     });
     nav.appendChild(b);
   }
 
-  nav.appendChild(
-    mk("Next", currentPage === totalPages, () => {
-      currentPage = Math.min(totalPages, currentPage + 1);
-      renderTable();
-    })
-  );
-  nav.appendChild(
-    mk("Last", currentPage === totalPages, () => {
-      currentPage = totalPages;
-      renderTable();
-    })
-  );
+  nav.appendChild(mk("Next", currentPage === totalPages, () => {
+    currentPage = Math.min(totalPages, currentPage + 1); renderTable();
+  }));
+
+  nav.appendChild(mk("Last", currentPage === totalPages, () => {
+    currentPage = totalPages; renderTable();
+  }));
 }
 
 /* =========================
-   Data formatting helpers
-   ========================= */
-function normalizeDateCell(v) {
-  if (v == null) return "";
-
-  // If Excel gave a number, it might be an Excel serial date
-  if (typeof v === "number" && Number.isFinite(v)) {
-    // Excel serial date: day 1 = 1899-12-31 (with 1900 leap bug)
-    // This formula works for most modern Excel sheets.
-    const ms = Math.round((v - 25569) * 86400 * 1000);
-    return fmtLocalDate(ms);
-  }
-
-  const s = String(v).trim();
-  if (!s) return "";
-
-  // If it's already a date-like string, try Date parse
-  const d = new Date(s);
-  if (!Number.isNaN(d.getTime())) return fmtLocalDate(d.getTime());
-
-  return s;
-}
-
-function normalizeTimeCell(v) {
-  if (v == null) return "";
-
-  // If Excel gave "18:00" as string, keep it but normalize display
-  const s = String(v).trim();
-  if (!s) return "";
-
-  // if it contains AM/PM already, keep it
-  if (/\b(am|pm)\b/i.test(s)) return s;
-
-  // If it's "18:00" or "18:00:00" -> show in 12-hour format
-  const m = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(s);
-  if (m) {
-    const hh = parseInt(m[1], 10);
-    const mm = parseInt(m[2], 10);
-
-    const d = new Date();
-    d.setHours(hh, mm, 0, 0);
-
-    return new Intl.DateTimeFormat(undefined, {
-      hour: "numeric",
-      minute: "2-digit",
-    }).format(d);
-  }
-
-  return s;
-}
-
-function parseDateToMs(s) {
-  const t = Date.parse(String(s || "").trim());
-  return Number.isNaN(t) ? -Infinity : t;
-}
-
-function parseTimeToMinutes(s) {
-  const str = String(s || "").trim().toLowerCase();
-  if (!str) return -Infinity;
-
-  // 9:30 AM
-  const ampm = /^(\d{1,2}):(\d{2})\s*(am|pm)$/.exec(str);
-  if (ampm) {
-    let hh = parseInt(ampm[1], 10);
-    const mm = parseInt(ampm[2], 10);
-    const ap = ampm[3];
-
-    if (ap === "pm" && hh !== 12) hh += 12;
-    if (ap === "am" && hh === 12) hh = 0;
-
-    return hh * 60 + mm;
-  }
-
-  // 18:00
-  const hm = /^(\d{1,2}):(\d{2})$/.exec(str);
-  if (hm) return parseInt(hm[1], 10) * 60 + parseInt(hm[2], 10);
-
-  return -Infinity;
-}
-
-/* =========================
-   Utils
+   Utilities
    ========================= */
 function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, (s) =>
@@ -624,7 +732,6 @@ function escapeHtml(str) {
 }
 
 function fmtLocalDate(ms) {
-  if (ms == null) return "";
   const d = new Date(ms);
   return new Intl.DateTimeFormat(undefined, {
     year: "numeric",
@@ -633,8 +740,38 @@ function fmtLocalDate(ms) {
   }).format(d);
 }
 
+function fmtLocalTime(ms) {
+  const d = new Date(ms);
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(d);
+}
+
+function parseTimeToMinutes(s) {
+  const str = String(s || "").trim().toLowerCase();
+  if (!str) return -Infinity;
+
+  // "9:30 am"
+  const ampm = /^(\d{1,2}):(\d{2})\s*(am|pm)$/.exec(str);
+  if (ampm) {
+    let hh = parseInt(ampm[1], 10);
+    const mm = parseInt(ampm[2], 10);
+    const ap = ampm[3];
+    if (ap === "pm" && hh !== 12) hh += 12;
+    if (ap === "am" && hh === 12) hh = 0;
+    return hh * 60 + mm;
+  }
+
+  // "18:00"
+  const hm = /^(\d{1,2}):(\d{2})$/.exec(str);
+  if (hm) return parseInt(hm[1], 10) * 60 + parseInt(hm[2], 10);
+
+  return -Infinity;
+}
+
 /* =========================
-   Timezone chip
+   Viewer timezone chip
    ========================= */
 function gmtOffsetAbbr(d = new Date()) {
   const offMin = -d.getTimezoneOffset();
@@ -647,9 +784,7 @@ function gmtOffsetAbbr(d = new Date()) {
 
 function detectTimezone() {
   const iana = (Intl.DateTimeFormat().resolvedOptions().timeZone || "").trim();
-  const parts = new Intl.DateTimeFormat(undefined, {
-    timeZoneName: "short",
-  }).formatToParts(new Date());
+  const parts = new Intl.DateTimeFormat(undefined, { timeZoneName: "short" }).formatToParts(new Date());
   const tzPart = parts.find((p) => p.type === "timeZoneName");
 
   let abbr = tzPart && tzPart.value ? tzPart.value.trim() : "";
