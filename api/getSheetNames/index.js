@@ -1,26 +1,32 @@
+// api/getSheetNames/index.js
+const { graphGet, mustEnv } = require("../_shared/msGraph");
+
 module.exports = async function (context, req) {
   try {
-    // ✅ TEMP: Hardcoded tab list (so frontend works instantly)
-    // Later we will read this list dynamically from Excel
-    const tabs = ["Sep 2025", "Oct 2025", "Nov 2025", "Dec 2025"];
+    const fileId = mustEnv("MS_EXCEL_FILE_ID");
+
+    // Get worksheet list from the Excel workbook
+    const data = await graphGet(
+      `/me/drive/items/${encodeURIComponent(fileId)}/workbook/worksheets`
+    );
+
+    const names = (data.value || [])
+      .map((w) => w?.name)
+      .filter(Boolean);
 
     context.res = {
       status: 200,
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: tabs
+      headers: { "Content-Type": "application/json" },
+      body: names,
     };
   } catch (err) {
     context.res = {
       status: 500,
-      headers: {
-        "Content-Type": "application/json"
-      },
+      headers: { "Content-Type": "application/json" },
       body: {
         ok: false,
-        error: err.message || String(err)
-      }
+        error: err.message || String(err),
+      },
     };
   }
 };
