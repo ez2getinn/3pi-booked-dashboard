@@ -1,73 +1,48 @@
 /* ============================================================================
- * SHIFT4 Web App – JS (Option B2: Corporate GAS backend, Azure Static frontend)
+ * SHIFT4 Booked Dashboard – app.js (Azure Static Web Apps + Azure Functions)
  *
- * ✅ IMPORTANT:
- * - Azure Functions CANNOT call private corporate GAS (no login cookies)
- * - So the BROWSER calls GAS directly (works because user is logged in)
+ * ✅ Frontend calls Azure Functions:
+ *   GET /api/getSheetNames
+ *   GET /api/getSheetData?sheet=Sep%202025
  *
- * This file keeps ALL logic from your original Azure version.
+ * ✅ Scorecards:
+ *   - Calculated in browser (no need /api/getBookedCounts)
  *
- * GAS must expose these callable functions:
- *   getSheetNames()
- *   getSheetData(sheetName)
- *   getBookedCounts()
- *   getVersion()
+ * ✅ No Google Apps Script logic (REMOVED)
+ * ✅ No /api/getVersion polling (REMOVED)
  * ========================================================================== */
 
-/* ========== GAS Base (your corporate web app) ========== */
-const GAS_BASE =
-  "https://script.google.com/a/macros/shift4.com/s/AKfycbxb4baiuXwUx0UGj9r79eFVhijOLN0fX3dHSbClYLeVM_AhZSW00uzntZDWGi0iMLIqyA/exec";
-
-/* ========== GAS fetch wrapper (replaces Azure /api/*) ========== */
+/* ========== Azure Functions fetch wrapper ========== */
 async function apiGet(path, label = path) {
-  // Convert "/api/getSheetNames" style calls into GAS fn calls
-  const clean = String(path || "").trim();
-
-  let gasQuery = "";
-
-  if (clean.startsWith("/api/getSheetNames")) {
-    gasQuery = "fn=getSheetNames";
-  } else if (clean.startsWith("/api/getBookedCounts")) {
-    gasQuery = "fn=getBookedCounts";
-  } else if (clean.startsWith("/api/getVersion")) {
-    gasQuery = "fn=getVersion";
-  } else if (clean.startsWith("/api/getSheetData")) {
-    const urlObj = new URL("https://dummy.com" + clean);
-    const sheet = urlObj.searchParams.get("sheet") || "Jan";
-    gasQuery = `fn=getSheetData&sheet=${encodeURIComponent(sheet)}`;
-  } else {
-    throw new Error(`apiGet(): Unknown endpoint: ${clean}`);
-  }
-
-  const url = `${GAS_BASE}?${gasQuery}`;
+  const url = String(path || "").trim();
 
   try {
     const res = await fetch(url, {
       method: "GET",
-      credentials: "include", // ✅ required for corporate Google auth
       headers: { Accept: "application/json" },
     });
 
+    const ct = (res.headers.get("content-type") || "").toLowerCase();
     const text = await res.text();
 
-    // Detect HTML login pages
-    const t = text.trim();
-    if (t.startsWith("<!DOCTYPE") || t.startsWith("<html")) {
-      console.warn(`[API:${label}] GAS returned HTML (login required).`);
+    if (!res.ok) {
+      throw new Error(`[${label}] HTTP ${res.status}: ${text.slice(0, 200)}`);
+    }
+
+    // If Azure returns HTML, API route isn't being served (or wrong URL)
+    if (ct.includes("text/html")) {
       throw new Error(
-        "GAS is private. You must be logged into Shift4 Google to use this app."
+        `[${label}] Returned HTML instead of JSON. API not found or misrouted.`
       );
     }
 
-    // Parse JSON safely
     try {
       return JSON.parse(text);
-    } catch (e) {
-      console.warn(`[API:${label}] Not valid JSON:`, text.slice(0, 300));
-      throw new Error(`Invalid JSON returned from GAS for: ${label}`);
+    } catch {
+      throw new Error(`[${label}] Invalid JSON: ${text.slice(0, 200)}`);
     }
   } catch (err) {
-    console.warn(`[API:${label}]`, err);
+    console.warn(`apiGet failed: ${label}`, err);
     throw err;
   }
 }
@@ -294,7 +269,7 @@ document.addEventListener("DOMContentLoaded", () => {
   queueTask(() => loadTabsAndFirstPaint());
 });
 
-/* ========== First paint (then polling/heartbeat) ========== */
+/* ========== First paint ========== */
 async function loadTabsAndFirstPaint() {
   tzInfo = detectTimezone();
   ensureTzChip();
@@ -306,15 +281,20 @@ async function loadTabsAndFirstPaint() {
 
   if (!monthTabs.length) {
     setSummaryLabel(false, "No month", 0);
+    els.cards && (els.cards.innerHTML = "");
     return;
   }
 
   selectCurrentMonth();
+
+  // scorecards
   await refreshCards();
+
+  // default mode (Today → Dec)
   forceDefaultMode();
   await reload();
 
-  startVersionPolling();
+  // optional heartbeat refresh (safe)
   startCardsHeartbeat();
 }
 
@@ -324,20 +304,50 @@ function selectCurrentMonth() {
   setActiveCard(activeMonthName);
 }
 
-/* ========== Scorecards ========== */
+/* ========== Scorecards (BOOKED counts) ========== */
 let lastCardsJSON = "";
 
 async function refreshCards() {
-  const items = await apiGet("/api/getBookedCounts", "getBookedCounts").catch(
-    () => null
-  );
-  if (!items) return;
+  // Fallback-only version: calculate counts from each month sheet
+  if (!Array.isArray(monthTabs) || !monthTabs.length) {
+    els.cards && (els.cards.innerHTML = "");
+    return;
+  }
 
-  const j = JSON.stringify(items);
+  const results = [];
+
+  for (const name of monthTabs) {
+    const payload = await apiGet(
+      `/api/getSheetData?sheet=${encodeURIComponent(name)}`,
+      `getSheetData:${name}`
+    ).catch(() => null);
+
+    if (!payload || !Array.isArray(payload.headers) || !Array.isArray(payload.rows)) {
+      results.push({ name, count: 0 });
+      continue;
+    }
+
+    // Find "Booked" column index
+    const bookedIdx = payload.headers.findIndex(
+      (h) => String(h || "").trim().toLowerCase() === "booked"
+    );
+
+    let count = 0;
+    if (bookedIdx >= 0) {
+      for (const r of payload.rows) {
+        const v = String((r && r[bookedIdx]) || "").trim().toLowerCase();
+        if (v === "booked") count++;
+      }
+    }
+
+    results.push({ name, count });
+  }
+
+  const j = JSON.stringify(results);
   if (j === lastCardsJSON) return;
 
   lastCardsJSON = j;
-  renderCards(items);
+  renderCards(results);
   setActiveCard(activeMonthName);
 }
 
@@ -698,39 +708,7 @@ function drawPagination(totalPages) {
   );
 }
 
-/* ========== Version polling (acts ONLY on change) ========== */
-const POLL_MS = 60 * 1000;
-let lastVersion = null;
-let pollTimer = null;
-
-function startVersionPolling() {
-  pollTimer = setInterval(async () => {
-    if (netBusy) return;
-
-    const v = await apiGet("/api/getVersion", "getVersion").catch(() => null);
-    if (v == null) {
-      clearInterval(pollTimer);
-      pollTimer = null;
-      return;
-    }
-
-    if (lastVersion === null) {
-      lastVersion = v;
-      return;
-    }
-
-    if (v !== lastVersion) {
-      lastVersion = v;
-      queueTask(async () => {
-        await refreshCards();
-        forceDefaultMode();
-        await reload();
-      });
-    }
-  }, POLL_MS);
-}
-
-/* ========== Card heartbeat (fallback) ========== */
+/* ========== Card heartbeat ========== */
 const CARDS_HEARTBEAT_MS = 120 * 1000;
 let cardsTimer = null;
 
@@ -787,14 +765,19 @@ function gmtOffsetAbbr(d = new Date()) {
   const abs = Math.abs(offMin);
   const hh = Math.floor(abs / 60);
   const mm = abs % 60;
-  return "GMT" + sign + String(hh) + (mm ? ":" + String(mm).padStart(2, "0") : "");
+  return (
+    "GMT" +
+    sign +
+    String(hh) +
+    (mm ? ":" + String(mm).padStart(2, "0") : "")
+  );
 }
 
 function detectTimezone() {
   const iana = (Intl.DateTimeFormat().resolvedOptions().timeZone || "").trim();
-  const parts = new Intl.DateTimeFormat(undefined, { timeZoneName: "short" }).formatToParts(
-    new Date()
-  );
+  const parts = new Intl.DateTimeFormat(undefined, {
+    timeZoneName: "short",
+  }).formatToParts(new Date());
   const tzPart = parts.find((p) => p.type === "timeZoneName");
 
   let abbr = tzPart && tzPart.value ? tzPart.value.trim() : "";
