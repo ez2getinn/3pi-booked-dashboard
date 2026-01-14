@@ -1,7 +1,7 @@
-const { mustEnv, graphGet, resolveSiteAndDrive } = require("../_shared/msGraph");
-
 module.exports = async function (context, req) {
   try {
+    const { mustEnv, graphGet, resolveSiteAndDrive } = require("../_shared/msGraph");
+
     const sheet = String(req.query.sheet || "").trim();
     if (!sheet) {
       context.res = { status: 400, body: { ok: false, error: "Missing query param: sheet" } };
@@ -47,7 +47,6 @@ module.exports = async function (context, req) {
       },
     };
   } catch (err) {
-    // 🔥 THIS IS THE IMPORTANT PART: return EVERYTHING we can
     context.res = {
       status: 500,
       headers: { "Content-Type": "application/json" },
