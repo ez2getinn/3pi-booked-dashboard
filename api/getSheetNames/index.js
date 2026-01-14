@@ -1,5 +1,3 @@
-const fetch = require("node-fetch");
-
 async function getAccessToken() {
   const tenantId = process.env.MS_TENANT_ID;
   const clientId = process.env.MS_CLIENT_ID;
@@ -37,24 +35,18 @@ async function graphGet(url, accessToken) {
   });
 
   const text = await res.text();
-  let json;
-  try {
-    json = JSON.parse(text);
-  } catch {
-    json = { raw: text };
-  }
 
   if (!res.ok) {
     throw new Error(`Graph GET failed ${res.status}: ${text}`);
   }
 
-  return json;
+  return JSON.parse(text);
 }
 
 module.exports = async function (context, req) {
   try {
-    const siteHost = process.env.MS_EXCEL_SITE_HOST; // e.g. itguru4u-my.sharepoint.com
-    const sitePath = process.env.MS_EXCEL_SITE_PATH; // e.g. /personal/ashiryousaf_itguru4u_onmicrosoft_com
+    const siteHost = process.env.MS_EXCEL_SITE_HOST;
+    const sitePath = process.env.MS_EXCEL_SITE_PATH;
     const fileItemId = process.env.MS_EXCEL_FILE_ID;
 
     if (!siteHost || !sitePath || !fileItemId) {
@@ -72,15 +64,11 @@ module.exports = async function (context, req) {
 
     const token = await getAccessToken();
 
-    // ✅ Get siteId (application auth friendly)
+    // ✅ Resolve SharePoint site
     const siteUrl = `https://graph.microsoft.com/v1.0/sites/${siteHost}:${sitePath}`;
     const site = await graphGet(siteUrl, token);
 
-    if (!site?.id) {
-      throw new Error("Could not resolve site.id from sites/{host}:{path}");
-    }
-
-    // ✅ Get workbook worksheet names
+    // ✅ Get worksheet names
     const wsUrl = `https://graph.microsoft.com/v1.0/sites/${site.id}/drive/items/${fileItemId}/workbook/worksheets?$select=name`;
     const ws = await graphGet(wsUrl, token);
 
