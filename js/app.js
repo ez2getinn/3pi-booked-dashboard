@@ -142,9 +142,9 @@ let pageSize = (els.pageSize && parseInt(els.pageSize.value, 10)) || 15;
 let sortCol = 2;
 let sortDir = "asc";
 
-const DATE_COL_INDEX = 2;
-const START_COL_INDEX = 3;
-const END_COL_INDEX = 4;
+const DATE_COL_INDEX = 0;
+const START_COL_INDEX = 5;
+const END_COL_INDEX = 6;
 
 // Timezone display state
 let tzInfo = { abbr: "", iana: "" };
