@@ -1,30 +1,50 @@
 const { mustEnv, graphGet, resolveSiteAndDrive } = require("../_shared/msGraph");
 
 module.exports = async function (context, req) {
-  context.log("🔥 getSheetData called");
-  context.log("Query:", req.query);
+  context.res = {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+    body: { ok: true, step: "start" },
+  };
 
   try {
     const sheet = String(req.query.sheet || "").trim();
     if (!sheet) throw new Error("Missing query param: sheet");
 
     const fileId = mustEnv("MS_EXCEL_FILE_ID");
-    context.log("MS_EXCEL_FILE_ID:", fileId);
+    const { driveId } = await resolveSiteAndDrive();
 
-    const { driveId, siteId } = await resolveSiteAndDrive();
-    context.log("Resolved siteId:", siteId);
-    context.log("Resolved driveId:", driveId);
-
+    // do NOT encode inside worksheets('...')
     const safeSheet = sheet.replace(/'/g, "''");
-    const SAFE_RANGE = "A1:Z50";
 
     const url =
-      `/drives/${encodeURIComponent(driveId)}/items/${encodeURIComponent(fileId)}` +
-      `/workbook/worksheets('${safeSheet}')/range(address='${SAFE_RANGE}')?$select=values`;
+      `/drives/${driveId}/items/${fileId}` +
+      `/workbook/worksheets('${safeSheet}')/usedRange(valuesOnly=true)?$select=values`;
 
-    context.log("Graph URL:", url);
-
+    // DEBUG: return URL first (so we know exactly what endpoint is hit)
     const range = await graphGet(url);
+
+    const values = range?.values || [];
+
+    if (!values.length) {
+      context.res = {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+        body: {
+          ok: true,
+          sheet,
+          driveId,
+          fileId,
+          valuesCount: 0,
+          headers: [],
+          rows: [],
+        },
+      };
+      return;
+    }
+
+    const headers = values[0] || [];
+    const rows = values.slice(1);
 
     context.res = {
       status: 200,
@@ -32,22 +52,24 @@ module.exports = async function (context, req) {
       body: {
         ok: true,
         sheet,
-        range: SAFE_RANGE,
-        valuesPreview: (range.values || []).slice(0, 5),
+        driveId,
+        fileId,
+        valuesCount: values.length,
+        headers,
+        rows,
       },
     };
   } catch (err) {
-    // ✅ RETURN FULL ERROR DETAILS
-    context.log.error("❌ ERROR:", err);
-
+    // FORCE return full error details as JSON
     context.res = {
       status: 500,
       headers: { "Content-Type": "application/json" },
       body: {
         ok: false,
-        message: err.message || String(err),
-        stack: err.stack || null,
-        raw: err,
+        name: err?.name,
+        message: err?.message,
+        stack: err?.stack,
+        raw: String(err),
       },
     };
   }
