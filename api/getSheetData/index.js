@@ -1,72 +1,119 @@
+// api/getSheetData/index.js
+const { graphGet, mustEnv } = require("../_shared/msGraph");
+
+function normalizeHeader(h) {
+  return String(h || "").trim();
+}
+
+function parseDateToMs(v) {
+  // Excel may return:
+  // - "1/10/2026"
+  // - "2026-01-10"
+  // - a number (Excel serial date)
+  if (v == null || v === "") return null;
+
+  // If it's already a number, treat it like Excel date serial
+  // Excel serial date: days since 1899-12-30
+  if (typeof v === "number") {
+    const excelEpoch = new Date(Date.UTC(1899, 11, 30));
+    return excelEpoch.getTime() + v * 86400000;
+  }
+
+  const s = String(v).trim();
+  const d = new Date(s);
+  if (!isNaN(d.getTime())) return d.getTime();
+
+  return null;
+}
+
+function parseTimeToMs(dateMs, timeVal) {
+  if (!dateMs || timeVal == null || timeVal === "") return null;
+
+  // If time is number = fraction of a day in Excel (ex: 0.5 = 12:00)
+  if (typeof timeVal === "number") {
+    return dateMs + Math.round(timeVal * 86400000);
+  }
+
+  const s = String(timeVal).trim();
+
+  // Try parse "8:00 AM"
+  const d = new Date(dateMs);
+  const t = new Date(`${d.toDateString()} ${s}`);
+  if (!isNaN(t.getTime())) return t.getTime();
+
+  return null;
+}
+
 module.exports = async function (context, req) {
-  const sheet = (req.query.sheet || "Sep").toString();
+  try {
+    const fileId = mustEnv("MS_EXCEL_FILE_ID");
+    const sheetName = (req.query.sheet || "").trim();
 
-  // These headers MUST match your frontend order:
-  // Email, Name, Date, Start Time, End Time, Booked, Site, Account, Ticket, Shift4 MID
-  const headers = [
-    "Email",
-    "Name",
-    "Date",
-    "Start Time",
-    "End Time",
-    "Booked",
-    "Site",
-    "Account",
-    "Ticket",
-    "Shift4 MID",
-  ];
+    if (!sheetName) {
+      throw new Error("Missing query param: sheet");
+    }
 
-  // ✅ Mock rows for now (we will connect Microsoft Excel later)
-  const rows = [
-    [
-      "tech1@shift4.com",
-      "John Doe",
-      "1/10/2026",
-      "8:00 AM",
-      "5:00 PM",
-      "BOOKED",
-      "Las Vegas",
-      "Shift4",
-      "000123",
-      "009900",
-    ],
-    [
-      "tech2@shift4.com",
-      "Jane Smith",
-      "1/12/2026",
-      "9:00 AM",
-      "6:00 PM",
-      "BOOKED",
-      "New York",
-      "Shift4",
-      "000456",
-      "008800",
-    ],
-  ];
+    // Read used range of worksheet
+    // This returns { values: [ [headers...], [row...], ... ] }
+    const range = await graphGet(
+      `/me/drive/items/${encodeURIComponent(
+        fileId
+      )}/workbook/worksheets('${encodeURIComponent(
+        sheetName.replace(/'/g, "''")
+      )}')/usedRange(valuesOnly=true)?$select=values`
+    );
 
-  // IMPORTANT: frontend expects ms aligned with each row
-  const ms = rows.map((r) => {
-    // date string is at index 2
-    const d = new Date(r[2]);
-    const dateMs = isNaN(d.getTime()) ? null : d.getTime();
+    const values = range.values || [];
+    if (!values.length) {
+      context.res = {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+        body: { sheet: sheetName, headers: [], rows: [], ms: [] },
+      };
+      return;
+    }
 
-    // fake start/end on same day
-    const start = new Date(d);
-    start.setHours(8, 0, 0, 0);
+    const headers = values[0].map(normalizeHeader);
+    const rows = values.slice(1).filter((r) => Array.isArray(r) && r.some((x) => String(x || "").trim() !== ""));
 
-    const end = new Date(d);
-    end.setHours(17, 0, 0, 0);
+    // find key columns by name (your frontend expects these indices)
+    // fallback to fixed indexes if names match your layout
+    const colDate = headers.findIndex((h) => h.toLowerCase() === "date");
+    const colStart = headers.findIndex((h) => h.toLowerCase().includes("start"));
+    const colEnd = headers.findIndex((h) => h.toLowerCase().includes("end"));
 
-    return {
-      dateMs: dateMs,
-      startMs: isNaN(start.getTime()) ? null : start.getTime(),
-      endMs: isNaN(end.getTime()) ? null : end.getTime(),
+    const ms = rows.map((r) => {
+      const dateVal = colDate >= 0 ? r[colDate] : null;
+      const dateMs = parseDateToMs(dateVal);
+
+      const startVal = colStart >= 0 ? r[colStart] : null;
+      const endVal = colEnd >= 0 ? r[colEnd] : null;
+
+      return {
+        dateMs,
+        startMs: parseTimeToMs(dateMs, startVal),
+        endMs: parseTimeToMs(dateMs, endVal),
+      };
+    });
+
+    context.res = {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+      body: {
+        sheet: sheetName,
+        headers,
+        rows,
+        ms,
+      },
     };
-  });
-
-  context.res = {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-    body: { sheet, headers, rows, ms },
-  };
+  } catch (err) {
+    context.res = {
+      status: 500,
+      headers: { "Content-Type": "application/json" },
+      body: {
+        ok: false,
+        error: err.message || String(err),
+      },
+    };
+  }
 };
