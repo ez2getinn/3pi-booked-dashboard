@@ -1,3 +1,4 @@
+// api/getSheetData/index.js
 const { mustEnv, graphGet, resolveSiteAndDrive } = require("../_shared/msGraph");
 
 module.exports = async function (context, req) {
@@ -8,20 +9,26 @@ module.exports = async function (context, req) {
     const fileId = mustEnv("MS_EXCEL_FILE_ID");
     const { driveId } = await resolveSiteAndDrive();
 
-    // Escape single quotes for worksheet('...')
-    const safeSheet = sheet.replace(/'/g, "''");
+    // ✅ Graph expects raw worksheet name inside ('...')
+    // We ONLY escape single quotes (Excel worksheet name rules)
+    const safeSheetName = sheet.replace(/'/g, "''");
 
-    const range = await graphGet(
-      `/drives/${encodeURIComponent(driveId)}/items/${encodeURIComponent(fileId)}` +
-        `/workbook/worksheets('${encodeURIComponent(safeSheet)}')/usedRange(valuesOnly=true)?$select=values`
-    );
+    // ✅ DO NOT encodeURIComponent(sheet) inside the worksheet('...')
+    // Only encode parts like driveId/fileId (path segments)
+    const url =
+      `/drives/${encodeURIComponent(driveId)}` +
+      `/items/${encodeURIComponent(fileId)}` +
+      `/workbook/worksheets('${safeSheetName}')/usedRange(valuesOnly=true)?$select=values`;
 
-    const values = range.values || [];
+    const range = await graphGet(url);
+
+    const values = range?.values || [];
+
     if (!values.length) {
       context.res = {
         status: 200,
         headers: { "Content-Type": "application/json" },
-        body: { sheet, headers: [], rows: [], ms: [] },
+        body: { sheet, headers: [], rows: [] }
       };
       return;
     }
@@ -32,13 +39,18 @@ module.exports = async function (context, req) {
     context.res = {
       status: 200,
       headers: { "Content-Type": "application/json" },
-      body: { sheet, headers, rows, ms: [] },
+      body: { sheet, headers, rows }
     };
   } catch (err) {
     context.res = {
       status: 500,
       headers: { "Content-Type": "application/json" },
-      body: { ok: false, error: err.message || String(err) },
+      body: {
+        ok: false,
+        error: err?.message || String(err),
+        // ✅ extra debug info to see real cause in browser
+        stack: err?.stack || null
+      }
     };
   }
 };
