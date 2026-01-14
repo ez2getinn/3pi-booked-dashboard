@@ -1,20 +1,24 @@
 /* ============================================================================
- * SHIFT4 Booked Dashboard – app.js (Azure Static Web Apps + Azure Functions)
+ * SHIFT4 Web App – JS (Azure Static frontend + Azure Functions API backend)
  *
- * ✅ Frontend calls Azure Functions:
- *   GET /api/getSheetNames
- *   GET /api/getSheetData?sheet=Sep%202025
+ * ✅ FIXED VERSION:
+ * - Default mode (YEARLY DATA) now shows ALL rows across ALL tabs
+ * - No "today → end of year" filtering anymore (this was causing 0 rows)
  *
- * ✅ Scorecards:
- *   - Calculated in browser (no need /api/getBookedCounts)
- *
- * ✅ No Google Apps Script logic (REMOVED)
- * ✅ No /api/getVersion polling (REMOVED)
+ * Azure Functions must expose:
+ *   /api/getSheetNames
+ *   /api/getSheetData?sheet=NAME
+ *   /api/getBookedCounts
  * ========================================================================== */
 
-/* ========== Azure Functions fetch wrapper ========== */
+/* ========== Azure API fetch wrapper ========== */
 async function apiGet(path, label = path) {
-  const url = String(path || "").trim();
+  const clean = String(path || "").trim();
+
+  // If someone passes full absolute URL, use it directly
+  const url = clean.startsWith("http")
+    ? clean
+    : `${window.location.origin}${clean}`;
 
   try {
     const res = await fetch(url, {
@@ -22,27 +26,22 @@ async function apiGet(path, label = path) {
       headers: { Accept: "application/json" },
     });
 
-    const ct = (res.headers.get("content-type") || "").toLowerCase();
+    // read raw text first so we can debug JSON issues
     const text = await res.text();
 
     if (!res.ok) {
-      throw new Error(`[${label}] HTTP ${res.status}: ${text.slice(0, 200)}`);
-    }
-
-    // If Azure returns HTML, API route isn't being served (or wrong URL)
-    if (ct.includes("text/html")) {
-      throw new Error(
-        `[${label}] Returned HTML instead of JSON. API not found or misrouted.`
-      );
+      console.warn(`[API:${label}] HTTP ${res.status}:`, text.slice(0, 300));
+      throw new Error(`API error ${res.status} for ${label}`);
     }
 
     try {
       return JSON.parse(text);
-    } catch {
-      throw new Error(`[${label}] Invalid JSON: ${text.slice(0, 200)}`);
+    } catch (e) {
+      console.warn(`[API:${label}] Not valid JSON:`, text.slice(0, 300));
+      throw new Error(`Invalid JSON returned for: ${label}`);
     }
   } catch (err) {
-    console.warn(`apiGet failed: ${label}`, err);
+    console.warn(`[API:${label}]`, err);
     throw err;
   }
 }
@@ -71,7 +70,7 @@ function initCollapsibles() {
       const nowOpen = !btn.classList.contains("open");
       setOpen(btn, panel, nowOpen);
 
-      // MONTHLY closed or YEARLY opened → Default view (Today→Dec)
+      // MONTHLY closed or YEARLY opened → Default view
       if (
         (id === "panel-monthly" && !nowOpen) ||
         (id === "panel-yearly" && nowOpen)
@@ -131,7 +130,7 @@ let activeMonthName = null;
 
 // Modes
 let defaultMode = true;
-let fromTodayLowerBound = true;
+let fromTodayLowerBound = false;
 let toEndOfYearUpperBound = null;
 
 // Table state
@@ -210,10 +209,6 @@ function parseTab(name) {
   };
 }
 
-function endOfYear(d) {
-  return new Date(d.getFullYear(), 11, 31, 23, 59, 59, 999);
-}
-
 function pickCurrentMonthIndex(names) {
   const now = new Date(),
     y = now.getFullYear(),
@@ -258,6 +253,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
     activeMonthName = name;
     defaultMode = false;
+
+    // in single month view we show everything
     fromTodayLowerBound = false;
     toEndOfYearUpperBound = null;
 
@@ -281,73 +278,38 @@ async function loadTabsAndFirstPaint() {
 
   if (!monthTabs.length) {
     setSummaryLabel(false, "No month", 0);
-    els.cards && (els.cards.innerHTML = "");
     return;
   }
 
   selectCurrentMonth();
-
-  // scorecards
   await refreshCards();
 
-  // default mode (Today → Dec)
+  // ✅ default mode always shows all rows across all months now
   forceDefaultMode();
   await reload();
-
-  // optional heartbeat refresh (safe)
-  startCardsHeartbeat();
 }
 
+/* ========== Month selection ========== */
 function selectCurrentMonth() {
   const idx = pickCurrentMonthIndex(monthTabs);
   activeMonthName = monthTabs[Math.max(0, idx)];
   setActiveCard(activeMonthName);
 }
 
-/* ========== Scorecards (BOOKED counts) ========== */
+/* ========== Scorecards ========== */
 let lastCardsJSON = "";
 
 async function refreshCards() {
-  // Fallback-only version: calculate counts from each month sheet
-  if (!Array.isArray(monthTabs) || !monthTabs.length) {
-    els.cards && (els.cards.innerHTML = "");
-    return;
-  }
+  const items = await apiGet("/api/getBookedCounts", "getBookedCounts").catch(
+    () => null
+  );
+  if (!items) return;
 
-  const results = [];
-
-  for (const name of monthTabs) {
-    const payload = await apiGet(
-      `/api/getSheetData?sheet=${encodeURIComponent(name)}`,
-      `getSheetData:${name}`
-    ).catch(() => null);
-
-    if (!payload || !Array.isArray(payload.headers) || !Array.isArray(payload.rows)) {
-      results.push({ name, count: 0 });
-      continue;
-    }
-
-    // Find "Booked" column index
-    const bookedIdx = payload.headers.findIndex(
-      (h) => String(h || "").trim().toLowerCase() === "booked"
-    );
-
-    let count = 0;
-    if (bookedIdx >= 0) {
-      for (const r of payload.rows) {
-        const v = String((r && r[bookedIdx]) || "").trim().toLowerCase();
-        if (v === "booked") count++;
-      }
-    }
-
-    results.push({ name, count });
-  }
-
-  const j = JSON.stringify(results);
+  const j = JSON.stringify(items);
   if (j === lastCardsJSON) return;
 
   lastCardsJSON = j;
-  renderCards(results);
+  renderCards(items);
   setActiveCard(activeMonthName);
 }
 
@@ -360,7 +322,9 @@ function renderCards(items) {
   els.cards.innerHTML = items
     .map(
       ({ name, count }) => `
-      <div class="card" data-name="${escapeHtml(name)}" title="${escapeHtml(name)}">
+      <div class="card" data-name="${escapeHtml(name)}" title="${escapeHtml(
+        name
+      )}">
         <span class="chip">BOOKED</span>
         <div class="title">${escapeHtml(name)}</div>
         <div class="value">${count}</div>
@@ -386,8 +350,11 @@ function setSummaryLabel(isDefaultMode, baseLabel, count) {
 function forceDefaultMode() {
   defaultMode = true;
   selectCurrentMonth();
-  fromTodayLowerBound = true;
-  toEndOfYearUpperBound = endOfYear(new Date());
+
+  // ✅ IMPORTANT FIX:
+  // Default view should show EVERYTHING, no date filtering.
+  fromTodayLowerBound = false;
+  toEndOfYearUpperBound = null;
 }
 
 function resetViewState() {
@@ -434,25 +401,13 @@ async function reloadSingleMonth(tab) {
   setActiveCard(tab);
 }
 
-// Default range view (today→Dec 31)
+// Default range view (ALL tabs)
 async function reloadDefaultRange() {
   if (!monthTabs.length) return;
   resetViewState();
 
-  const now = new Date(),
-    y = now.getFullYear(),
-    m = now.getMonth();
-
-  const wanted = monthTabs.filter((n) => {
-    const p = parseTab(n);
-    if (!p) return false;
-    const year = p.year == null ? y : p.year;
-    return year === y && p.month >= m;
-  });
-
-  const list = wanted.length
-    ? wanted
-    : monthTabs.slice(pickCurrentMonthIndex(monthTabs));
+  // ✅ FIX: load ALL tabs, do not filter by current month or year
+  const list = monthTabs.slice();
 
   let headersPicked = false;
   currentRows = [];
@@ -473,15 +428,14 @@ async function reloadDefaultRange() {
     if (Array.isArray(d.ms)) currentRowsMs.push(...d.ms);
   }
 
-  fromTodayLowerBound = true;
-  toEndOfYearUpperBound = endOfYear(now);
+  // ✅ FIX: no filter window in default mode
+  fromTodayLowerBound = false;
+  toEndOfYearUpperBound = null;
 
   drawHeader(currentHeaders);
   renderTable();
 
-  const label = `${MONTHS_SHORT[m]}–Dec`;
-  const totalInWindow = applyDateWindow(currentRows, currentRowsMs).length;
-  setSummaryLabel(true, label, totalInWindow);
+  setSummaryLabel(true, "All Months", currentRows.length);
 }
 
 /* ========== Table rendering (sort/paginate) ========== */
@@ -537,6 +491,15 @@ function updateHeaderState() {
 }
 
 function applyDateWindow(rows, rowsMs) {
+  // ✅ FIX: if not filtering, return everything
+  if (!fromTodayLowerBound && !toEndOfYearUpperBound) {
+    return rows.map((row, i) => ({
+      row,
+      ms: rowsMs[i] || { dateMs: null, startMs: null, endMs: null },
+      idx: i,
+    }));
+  }
+
   if (
     !Array.isArray(rows) ||
     !Array.isArray(rowsMs) ||
@@ -706,24 +669,6 @@ function drawPagination(totalPages) {
       renderTable();
     })
   );
-}
-
-/* ========== Card heartbeat ========== */
-const CARDS_HEARTBEAT_MS = 120 * 1000;
-let cardsTimer = null;
-
-function startCardsHeartbeat() {
-  cardsTimer = setInterval(() => {
-    if (netBusy) return;
-    queueTask(async () => {
-      const prev = lastCardsJSON;
-      await refreshCards();
-      if (lastCardsJSON !== prev) {
-        forceDefaultMode();
-        await reload();
-      }
-    });
-  }, CARDS_HEARTBEAT_MS);
 }
 
 /* ========== Utils ========== */
