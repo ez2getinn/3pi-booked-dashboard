@@ -1,3 +1,5 @@
+// VERSION: 2026-01-14-A
+
 const { mustEnv, graphGet, resolveSiteAndDrive } = require("../_shared/msGraph");
 
 module.exports = async function (context, req) {
