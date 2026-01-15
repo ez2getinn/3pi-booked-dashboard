@@ -1,18 +1,17 @@
 /* ============================================================================
  * 3PI BOOKED DASHBOARD – FRONTEND (Azure Static Web Apps)
  *
- * APIs REQUIRED:
+ * ✅ DEFAULT MODE (Option B):
+ *   - Load TODAY → END OF YEAR across remaining month sheets
+ *   - Example: Jan 14 → Dec 31
+ *
+ * ✅ SCORECARD MODE:
+ *   - Click a month scorecard → FULL month view
+ *
+ * Required APIs:
  *   ✅ /api/getSheetNames
  *   ✅ /api/getSheetData?sheet=NAME
  *   ✅ /api/getBookedCounts
- *
- * DEFAULT VIEW:
- *   ✅ Current Month (auto)
- *   ✅ Today → End of Month
- *
- * SCORECARDS:
- *   ✅ Jan → Dec order
- *   ✅ Click month = full month view
  * ========================================================================== */
 
 /* =========================
@@ -101,10 +100,10 @@ function initCollapsibles() {
       const nowOpen = !btn.classList.contains("open");
       setOpen(btn, panel, nowOpen);
 
-      // If MONTHLY collapses -> return to default view
+      // If MONTHLY collapses → force Default mode
       if (id === "panel-monthly" && !nowOpen) {
         forceDefaultMode();
-        queueTask(() => reloadDefault());
+        queueTask(() => reload());
       }
     });
   });
@@ -125,8 +124,21 @@ const els = {
 };
 
 /* =========================
-   Excel Column mapping
-   ========================= */
+   Excel source column mapping (your sheet)
+   =========================
+   A=Date
+   B=Title (ignore)
+   C=Description (ignore)
+   D=Email
+   E=Work (B) => this is Name
+   F=Start Time
+   G=End Time
+   H=BOOKED
+   I=Site
+   J=Account
+   K=Ticket
+   L=Shift4 MID
+*/
 const COL_DATE = 0;
 const COL_EMAIL = 3;
 const COL_NAME = 4;
@@ -153,9 +165,129 @@ const OUT_COLS = [
 ];
 
 /* =========================
-   Timezone chip
+   Month helpers
+   ========================= */
+const MONTHS_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+const MONTH_RX =
+  /^(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s+(\d{4}))?$/i;
+
+const MONTH_MAP = {
+  jan: 0,
+  feb: 1,
+  mar: 2,
+  apr: 3,
+  may: 4,
+  jun: 5,
+  jul: 6,
+  aug: 7,
+  sep: 8,
+  sept: 8,
+  oct: 9,
+  nov: 10,
+  dec: 11,
+};
+
+function parseMonthSheet(name) {
+  const m = MONTH_RX.exec(String(name || "").trim());
+  if (!m) return null;
+
+  const key = m[1].slice(0, 3).toLowerCase();
+  const monthIndex = MONTH_MAP[key];
+  const year = m[2] ? parseInt(m[2], 10) : null;
+
+  if (monthIndex == null) return null;
+  return { monthIndex, year };
+}
+
+function isMonthSheet(name) {
+  return !!parseMonthSheet(name);
+}
+
+function sortMonthNamesJanToDec(list) {
+  return list.slice().sort((a, b) => {
+    const pa = parseMonthSheet(a);
+    const pb = parseMonthSheet(b);
+
+    const ya = pa?.year ?? 9999;
+    const yb = pb?.year ?? 9999;
+    if (ya !== yb) return ya - yb;
+
+    const ma = pa?.monthIndex ?? 99;
+    const mb = pb?.monthIndex ?? 99;
+    return ma - mb;
+  });
+}
+
+function pickCurrentMonthTab(names) {
+  const now = new Date();
+  const currentShort = MONTHS_SHORT[now.getMonth()].toLowerCase();
+
+  const exact = names.find(
+    (n) => String(n || "").trim().slice(0, 3).toLowerCase() === currentShort
+  );
+
+  return exact || names[0];
+}
+
+/* =========================
+   Timezone chip (viewer local time)
    ========================= */
 let tzInfo = { abbr: "", iana: "" };
+
+function gmtOffsetAbbr(d = new Date()) {
+  const offMin = -d.getTimezoneOffset();
+  const sign = offMin >= 0 ? "+" : "-";
+  const abs = Math.abs(offMin);
+  const hh = Math.floor(abs / 60);
+  const mm = abs % 60;
+  return "GMT" + sign + String(hh) + (mm ? ":" + String(mm).padStart(2, "0") : "");
+}
+
+function detectTimezone() {
+  const iana = (Intl.DateTimeFormat().resolvedOptions().timeZone || "").trim();
+  const parts = new Intl.DateTimeFormat(undefined, { timeZoneName: "short" }).formatToParts(new Date());
+  const tzPart = parts.find((p) => p.type === "timeZoneName");
+
+  let abbr = tzPart && tzPart.value ? tzPart.value.trim() : "";
+  const looksAlpha = /^[A-Za-z]{2,5}$/.test(abbr);
+  const looksGMT = /^GMT[+-]/i.test(abbr);
+
+  if (!abbr || (!looksAlpha && !looksGMT)) abbr = gmtOffsetAbbr();
+  return { abbr, iana };
+}
+
+function tzCombinedLabel(info = tzInfo) {
+  if (!info) return "";
+  if (info.abbr && info.iana) return `${info.abbr} (${info.iana})`;
+  return info.abbr || info.iana || "";
+}
+
+function ensureTzChip() {
+  const bar = document.querySelector(".controls");
+  if (!bar) return;
+
+  let chip = document.getElementById("tzChip");
+  const label = tzCombinedLabel();
+  if (!label) return;
+
+  if (!chip) {
+    chip = document.createElement("span");
+    chip.id = "tzChip";
+    chip.setAttribute("aria-label", "Displayed time zone");
+    chip.style.marginLeft = "auto";
+    chip.style.background = "#E6F6FF";
+    chip.style.border = "1px solid #cbd5e1";
+    chip.style.color = "#0f172a";
+    chip.style.fontSize = "12px";
+    chip.style.fontWeight = "700";
+    chip.style.padding = "4px 8px";
+    chip.style.borderRadius = "999px";
+    bar.appendChild(chip);
+  }
+
+  chip.textContent = `Local time: ${label}`;
+}
 
 /* =========================
    App state
@@ -163,42 +295,16 @@ let tzInfo = { abbr: "", iana: "" };
 let monthTabs = [];
 let activeMonthName = null;
 
-let defaultMode = true;
+let defaultMode = true; // true=Today->EndOfYear, false=single month full view
 let displayRowsCurrent = [];
 
 let currentPage = 1;
 let pageSize = (els.pageSize && parseInt(els.pageSize.value, 10)) || 15;
-let sortCol = 2; // Date column
+let sortCol = 2; // Date column index
 let sortDir = "asc";
 
 let filterStartMs = null;
 let filterEndMs = null;
-
-/* Month ordering */
-const MONTHS_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-const MONTH_RX =
-  /^(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s+\d{4})?$/i;
-
-function isMonthSheet(name) {
-  return MONTH_RX.test(String(name || "").trim());
-}
-
-function monthIndexOfSheet(name) {
-  const s = String(name || "").trim().slice(0, 3).toLowerCase();
-  const map = { jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11 };
-  return map[s] ?? null;
-}
-
-function sortMonthNamesJanToDec(list) {
-  return list.slice().sort((a, b) => {
-    const ia = monthIndexOfSheet(a);
-    const ib = monthIndexOfSheet(b);
-    if (ia == null && ib == null) return String(a).localeCompare(String(b));
-    if (ia == null) return 1;
-    if (ib == null) return -1;
-    return ia - ib;
-  });
-}
 
 /* =========================
    Boot
@@ -212,7 +318,7 @@ document.addEventListener("DOMContentLoaded", () => {
   els.reloadBtn?.addEventListener("click", () => {
     queueTask(async () => {
       await refreshCards();
-      await reloadDefault();
+      await reload();
     });
   });
 
@@ -222,7 +328,7 @@ document.addEventListener("DOMContentLoaded", () => {
     renderTable();
   });
 
-  // scorecard click -> full month view
+  // Scorecard click -> single month (full)
   els.cards?.addEventListener("click", (e) => {
     const card = e.target.closest(".card[data-name]");
     if (!card) return;
@@ -232,23 +338,21 @@ document.addEventListener("DOMContentLoaded", () => {
 
     activeMonthName = name;
     defaultMode = false;
-    setActiveCard(activeMonthName);
 
-    queueTask(() => reloadSingleMonth(activeMonthName));
+    setActiveCard(activeMonthName);
+    queueTask(() => reload());
   });
 
   queueTask(() => loadTabsAndFirstPaint());
 });
 
 /* =========================
-   Load tabs
+   First paint
    ========================= */
 async function loadTabsAndFirstPaint() {
-  // Pull sheet names
+  // 1) Sheet names
   const names = await apiGet("/api/getSheetNames", "getSheetNames").catch(() => []);
   monthTabs = Array.isArray(names) ? names.filter(isMonthSheet) : [];
-
-  // Sort tabs Jan->Dec always
   monthTabs = sortMonthNamesJanToDec(monthTabs);
 
   if (!monthTabs.length) {
@@ -256,41 +360,33 @@ async function loadTabsAndFirstPaint() {
     return;
   }
 
-  // pick current month
+  // 2) Current month selection
   activeMonthName = pickCurrentMonthTab(monthTabs);
 
-  // default mode is current month today->end-of-month
+  // 3) Default = Today → End of Year
   forceDefaultMode();
 
-  // scorecards
+  // 4) Scorecards (Jan→Dec)
   await refreshCards();
 
-  // load table
-  await reloadDefault();
+  // 5) Default load table
+  await reload();
 }
 
-function pickCurrentMonthTab(names) {
-  const now = new Date();
-  const currentShort = MONTHS_SHORT[now.getMonth()];
-  const exact = names.find((n) => String(n).trim().toLowerCase() === currentShort.toLowerCase());
-  return exact || names[0];
-}
-
-function endOfMonth(d) {
-  return new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
+function endOfYear(d) {
+  return new Date(d.getFullYear(), 11, 31, 23, 59, 59, 999);
 }
 
 function forceDefaultMode() {
   defaultMode = true;
 
-  if (!activeMonthName) activeMonthName = pickCurrentMonthTab(monthTabs);
-
+  // start = today 00:00 local
   const now = new Date();
   const start = new Date(now);
   start.setHours(0, 0, 0, 0);
 
   filterStartMs = start.getTime();
-  filterEndMs = endOfMonth(now).getTime();
+  filterEndMs = endOfYear(now).getTime();
 
   setActiveCard(activeMonthName);
 }
@@ -325,10 +421,14 @@ async function refreshCards() {
     return;
   }
 
-  // Enforce Jan->Dec order on frontend too
+  // ✅ Only month sheets, always Jan→Dec
   items = items
     .filter((x) => x && isMonthSheet(x.name))
-    .sort((a, b) => (monthIndexOfSheet(a.name) ?? 99) - (monthIndexOfSheet(b.name) ?? 99));
+    .sort((a, b) => {
+      const pa = parseMonthSheet(a.name);
+      const pb = parseMonthSheet(b.name);
+      return (pa?.monthIndex ?? 99) - (pb?.monthIndex ?? 99);
+    });
 
   const j = JSON.stringify(items);
   if (j === lastCardsJSON) {
@@ -357,22 +457,59 @@ function setActiveCard(name) {
 }
 
 /* =========================
-   Reload handlers
+   Reload logic
    ========================= */
-async function reloadDefault() {
-  if (!activeMonthName) return;
+async function reload() {
+  const monthlyOpen = document
+    .getElementById("panel-monthly")
+    ?.classList.contains("open");
 
+  // If monthly is closed, always default mode
+  if (!monthlyOpen) forceDefaultMode();
+
+  if (defaultMode) return reloadDefaultTodayToEndOfYear();
+  return reloadSingleMonth(activeMonthName);
+}
+
+/* ✅ Default Mode = Today → End of Year across remaining months */
+async function reloadDefaultTodayToEndOfYear() {
   resetTableState();
 
-  const payload = await apiGet(
-    `/api/getSheetData?sheet=${encodeURIComponent(activeMonthName)}`,
-    `getSheetData:${activeMonthName}`
-  ).catch(() => ({ rows: [] }));
+  const now = new Date();
+  const currentMonthIndex = now.getMonth();
 
-  const rawRows = Array.isArray(payload.rows) ? payload.rows : [];
+  // Only current month → Dec
+  const wanted = monthTabs.filter((n) => {
+    const p = parseMonthSheet(n);
+    if (!p) return false;
 
-  // Map + filter today->end of month
-  const mapped = mapRowsForDisplay(rawRows);
+    const year = p.year ?? now.getFullYear();
+    if (year !== now.getFullYear()) return false;
+
+    return p.monthIndex >= currentMonthIndex;
+  });
+
+  const list = wanted.length ? wanted : monthTabs.slice();
+
+  const allRows = [];
+
+  for (const sheetName of list) {
+    const payload = await apiGet(
+      `/api/getSheetData?sheet=${encodeURIComponent(sheetName)}`,
+      `getSheetData:${sheetName}`
+    ).catch(() => ({ rows: [] }));
+
+    const rawRows = Array.isArray(payload.rows) ? payload.rows : [];
+
+    // Keep only BOOKED rows
+    for (const r of rawRows) {
+      if (String(r?.[COL_BOOKED] || "").trim().toUpperCase() !== "BOOKED") continue;
+      allRows.push(r);
+    }
+  }
+
+  // Map + filter by today->end of year
+  const mapped = mapRowsForDisplay(allRows);
 
   const filtered = mapped.filter((r) => {
     const ms = r.__dateMs;
@@ -382,11 +519,17 @@ async function reloadDefault() {
 
   displayRowsCurrent = filtered.map((x) => x.display);
 
+  // Header
   drawHeader(OUT_COLS.map((c) => c.key));
-  setStatusLabel(`${activeMonthName} (Today → End of Month)`, displayRowsCurrent.length);
+
+  // Summary label (Jan–Dec)
+  const label = `${MONTHS_SHORT[currentMonthIndex]}–Dec`;
+  setStatusLabel(`${label} (Today → End of Year)`, displayRowsCurrent.length);
+
   renderTable();
 }
 
+/* ✅ Scorecard Mode = FULL month */
 async function reloadSingleMonth(tab) {
   if (!tab) return;
 
@@ -398,12 +541,19 @@ async function reloadSingleMonth(tab) {
   ).catch(() => ({ rows: [] }));
 
   const rawRows = Array.isArray(payload.rows) ? payload.rows : [];
-  const mapped = mapRowsForDisplay(rawRows);
+
+  // Keep only BOOKED rows
+  const bookedOnly = rawRows.filter(
+    (r) => String(r?.[COL_BOOKED] || "").trim().toUpperCase() === "BOOKED"
+  );
+
+  const mapped = mapRowsForDisplay(bookedOnly);
 
   displayRowsCurrent = mapped.map((x) => x.display);
 
   drawHeader(OUT_COLS.map((c) => c.key));
   setStatusLabel(`${tab} (Full Month)`, displayRowsCurrent.length);
+
   renderTable();
 }
 
@@ -436,9 +586,11 @@ function mapRowsForDisplay(rawRows) {
   });
 }
 
+/* Excel date number -> JS epoch */
 function excelCellToDateMs(v) {
   if (v == null) return null;
 
+  // Excel numeric date
   if (typeof v === "number" && Number.isFinite(v)) {
     return Math.round((v - 25569) * 86400 * 1000);
   }
@@ -452,10 +604,11 @@ function excelCellToDateMs(v) {
   return null;
 }
 
+/* Excel time number -> local time epoch */
 function excelCellToTimeMs(v) {
   if (v == null) return null;
 
-  // Excel datetime number -> fractional = time
+  // Excel datetime number -> fractional portion = time
   if (typeof v === "number" && Number.isFinite(v)) {
     const frac = v - Math.floor(v);
     const totalMinutes = Math.round(frac * 24 * 60);
@@ -471,6 +624,7 @@ function excelCellToTimeMs(v) {
   const s = String(v).trim();
   if (!s) return null;
 
+  // 14:30
   const hm = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(s);
   if (hm) {
     const hh = parseInt(hm[1], 10);
@@ -480,6 +634,7 @@ function excelCellToTimeMs(v) {
     return d.getTime();
   }
 
+  // 2:30 PM
   const ampm = /^(\d{1,2}):(\d{2})\s*(am|pm)$/i.exec(s);
   if (ampm) {
     let hh = parseInt(ampm[1], 10);
@@ -526,6 +681,7 @@ function drawHeader(headers) {
   headers.forEach((h, idx) => {
     let label = String(h);
 
+    // append timezone to Start/End headers
     if ((label === "Start Time" || label === "End Time") && tzInfo?.abbr) {
       label = `${label} (${tzInfo.abbr})`;
     }
@@ -563,21 +719,24 @@ function updateHeaderState() {
 function renderTable() {
   const rows = displayRowsCurrent.slice();
 
+  // sort
   rows.sort((a, b) => {
     const va = a?.[sortCol] ?? "";
     const vb = b?.[sortCol] ?? "";
 
+    // sort by Date column
     if (sortCol === 2) {
       const ta = Date.parse(String(va)) || -Infinity;
       const tb = Date.parse(String(vb)) || -Infinity;
       return sortDir === "asc" ? ta - tb : tb - ta;
     }
 
-    const cmp = String(va).toLowerCase() < String(vb).toLowerCase()
-      ? -1
-      : String(va).toLowerCase() > String(vb).toLowerCase()
-      ? 1
-      : 0;
+    const cmp =
+      String(va).toLowerCase() < String(vb).toLowerCase()
+        ? -1
+        : String(va).toLowerCase() > String(vb).toLowerCase()
+        ? 1
+        : 0;
 
     return sortDir === "asc" ? cmp : -cmp;
   });
@@ -664,61 +823,4 @@ function fmtLocalDate(ms) {
 function fmtLocalTime(ms) {
   const d = new Date(ms);
   return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(d);
-}
-
-/* =========================
-   Timezone chip
-   ========================= */
-function gmtOffsetAbbr(d = new Date()) {
-  const offMin = -d.getTimezoneOffset();
-  const sign = offMin >= 0 ? "+" : "-";
-  const abs = Math.abs(offMin);
-  const hh = Math.floor(abs / 60);
-  const mm = abs % 60;
-  return "GMT" + sign + String(hh) + (mm ? ":" + String(mm).padStart(2, "0") : "");
-}
-
-function detectTimezone() {
-  const iana = (Intl.DateTimeFormat().resolvedOptions().timeZone || "").trim();
-  const parts = new Intl.DateTimeFormat(undefined, { timeZoneName: "short" }).formatToParts(new Date());
-  const tzPart = parts.find((p) => p.type === "timeZoneName");
-
-  let abbr = tzPart && tzPart.value ? tzPart.value.trim() : "";
-  const looksAlpha = /^[A-Za-z]{2,5}$/.test(abbr);
-  const looksGMT = /^GMT[+-]/i.test(abbr);
-
-  if (!abbr || (!looksAlpha && !looksGMT)) abbr = gmtOffsetAbbr();
-  return { abbr, iana };
-}
-
-function tzCombinedLabel(info = tzInfo) {
-  if (!info) return "";
-  if (info.abbr && info.iana) return `${info.abbr} (${info.iana})`;
-  return info.abbr || info.iana || "";
-}
-
-function ensureTzChip() {
-  const bar = document.querySelector(".controls");
-  if (!bar) return;
-
-  let chip = document.getElementById("tzChip");
-  const label = tzCombinedLabel();
-  if (!label) return;
-
-  if (!chip) {
-    chip = document.createElement("span");
-    chip.id = "tzChip";
-    chip.setAttribute("aria-label", "Displayed time zone");
-    chip.style.marginLeft = "auto";
-    chip.style.background = "#E6F6FF";
-    chip.style.border = "1px solid #cbd5e1";
-    chip.style.color = "#0f172a";
-    chip.style.fontSize = "12px";
-    chip.style.fontWeight = "700";
-    chip.style.padding = "4px 8px";
-    chip.style.borderRadius = "999px";
-    bar.appendChild(chip);
-  }
-
-  chip.textContent = `Local time: ${label}`;
 }
