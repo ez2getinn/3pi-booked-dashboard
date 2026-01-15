@@ -21,14 +21,8 @@ const MONTH_MAP = {
   dec: 11,
 };
 
-// ✅ Explicitly remove these tabs from frontend month list
-const EXCLUDED_TABS = new Set(["logs", "tech"]);
-
 function parseMonthSheet(name) {
-  const clean = String(name || "").trim();
-  if (!clean) return null;
-
-  const m = MONTH_RX.exec(clean);
+  const m = MONTH_RX.exec(String(name || "").trim());
   if (!m) return null;
 
   const key = m[1].slice(0, 3).toLowerCase();
@@ -41,60 +35,54 @@ function parseMonthSheet(name) {
 
 module.exports = async function (context, req) {
   try {
-    // (ensures env exists)
-    mustEnv("MS_EXCEL_FILE_ID");
-
-    const { driveId } = await resolveSiteAndDrive();
     const fileId = mustEnv("MS_EXCEL_FILE_ID");
+    const { driveId } = await resolveSiteAndDrive();
 
-    // 1) worksheet list
+    // ✅ List worksheets from the correct drive+file
     const wsUrl =
       `/drives/${encodeURIComponent(driveId)}/items/${encodeURIComponent(fileId)}` +
       `/workbook/worksheets?$select=name`;
 
     const ws = await graphGet(wsUrl);
 
-    // 2) only month sheets + exclude logs/tech
+    // ✅ keep only real month sheets (exclude logs/tech/etc)
     let sheetNames = (ws.value || [])
       .map((x) => x.name)
       .filter(Boolean)
-      .map((n) => String(n).trim())
-      .filter((n) => n.length > 0)
-      .filter((n) => !EXCLUDED_TABS.has(n.toLowerCase()))
       .filter((n) => !!parseMonthSheet(n));
 
-    // 3) sort Jan→Dec (and by year if present)
+    // ✅ sort by year (if present), then month Jan→Dec
     sheetNames.sort((a, b) => {
       const pa = parseMonthSheet(a);
       const pb = parseMonthSheet(b);
 
-      const ya = pa?.year ?? 9999;
-      const yb = pb?.year ?? 9999;
+      const ya = pa.year ?? 9999;
+      const yb = pb.year ?? 9999;
       if (ya !== yb) return ya - yb;
 
-      return (pa?.monthIndex ?? 0) - (pb?.monthIndex ?? 0);
+      return pa.monthIndex - pb.monthIndex;
     });
 
     context.res = {
       status: 200,
       headers: {
         "Content-Type": "application/json",
-        "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
-        Pragma: "no-cache",
-        Expires: "0",
+        "Cache-Control": "no-store",
       },
       body: sheetNames,
     };
   } catch (err) {
     context.res = {
       status: 500,
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "Cache-Control": "no-store",
+      },
       body: {
         ok: false,
         error: err?.message || String(err),
         name: err?.name,
         stack: err?.stack,
-        response: err?.response?.data || err?.response || null,
       },
     };
   }
