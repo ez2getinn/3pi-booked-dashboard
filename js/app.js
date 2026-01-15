@@ -1,14 +1,13 @@
 /* ============================================================================
  * 3PI BOOKED DASHBOARD – FRONTEND (Azure Static Web Apps)
  *
- * ✅ DEFAULT MODE (Option B):
- *   - Load TODAY → END OF YEAR across remaining month sheets
- *   - Example: Jan 14 → Dec 31
+ * DEFAULT MODE (Option B):
+ *   ✅ Today → End of Year (across remaining months)
  *
- * ✅ SCORECARD MODE:
- *   - Click a month scorecard → FULL month view
+ * SCORECARD MODE:
+ *   ✅ Click a month → Full month view
  *
- * Required APIs:
+ * APIs REQUIRED:
  *   ✅ /api/getSheetNames
  *   ✅ /api/getSheetData?sheet=NAME
  *   ✅ /api/getBookedCounts
@@ -24,6 +23,7 @@ async function apiGet(path, label = path) {
   const res = await fetch(url, {
     method: "GET",
     headers: { Accept: "application/json" },
+    cache: "no-store",
   });
 
   const text = await res.text();
@@ -59,6 +59,7 @@ function hideLoader() {
    ========================= */
 let netBusy = false;
 let debounceTimer = null;
+
 function queueTask(fn) {
   clearTimeout(debounceTimer);
   debounceTimer = setTimeout(async () => {
@@ -100,8 +101,11 @@ function initCollapsibles() {
       const nowOpen = !btn.classList.contains("open");
       setOpen(btn, panel, nowOpen);
 
-      // If MONTHLY collapses → force Default mode
-      if (id === "panel-monthly" && !nowOpen) {
+      // Monthly closed OR Yearly opened -> Default Mode reload
+      if (
+        (id === "panel-monthly" && !nowOpen) ||
+        (id === "panel-yearly" && nowOpen)
+      ) {
         forceDefaultMode();
         queueTask(() => reload());
       }
@@ -124,13 +128,13 @@ const els = {
 };
 
 /* =========================
-   Excel source column mapping (your sheet)
+   Excel column mapping (your sheet)
    =========================
    A=Date
    B=Title (ignore)
    C=Description (ignore)
    D=Email
-   E=Work (B) => this is Name
+   E=Work (B) => Name
    F=Start Time
    G=End Time
    H=BOOKED
@@ -150,7 +154,7 @@ const COL_ACCOUNT = 9;
 const COL_TICKET = 10;
 const COL_MID = 11;
 
-/* Required output order */
+/* Required output columns (EXACT ORDER) */
 const OUT_COLS = [
   { key: "Email", src: COL_EMAIL },
   { key: "Name", src: COL_NAME },
@@ -165,10 +169,8 @@ const OUT_COLS = [
 ];
 
 /* =========================
-   Month helpers
+   Month detection + ordering
    ========================= */
-const MONTHS_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-
 const MONTH_RX =
   /^(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s+(\d{4}))?$/i;
 
@@ -188,8 +190,13 @@ const MONTH_MAP = {
   dec: 11,
 };
 
+const MONTHS_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
 function parseMonthSheet(name) {
-  const m = MONTH_RX.exec(String(name || "").trim());
+  const clean = String(name || "").trim();
+  if (!clean) return null;
+
+  const m = MONTH_RX.exec(clean);
   if (!m) return null;
 
   const key = m[1].slice(0, 3).toLowerCase();
@@ -213,25 +220,21 @@ function sortMonthNamesJanToDec(list) {
     const yb = pb?.year ?? 9999;
     if (ya !== yb) return ya - yb;
 
-    const ma = pa?.monthIndex ?? 99;
-    const mb = pb?.monthIndex ?? 99;
-    return ma - mb;
+    return (pa?.monthIndex ?? 99) - (pb?.monthIndex ?? 99);
   });
 }
 
 function pickCurrentMonthTab(names) {
   const now = new Date();
-  const currentShort = MONTHS_SHORT[now.getMonth()].toLowerCase();
+  const m = now.getMonth();
+  const short = MONTHS_SHORT[m].toLowerCase();
 
-  const exact = names.find(
-    (n) => String(n || "").trim().slice(0, 3).toLowerCase() === currentShort
-  );
-
-  return exact || names[0];
+  const found = names.find((n) => String(n).trim().slice(0, 3).toLowerCase() === short);
+  return found || names[0];
 }
 
 /* =========================
-   Timezone chip (viewer local time)
+   Timezone chip (viewer local)
    ========================= */
 let tzInfo = { abbr: "", iana: "" };
 
@@ -295,12 +298,14 @@ function ensureTzChip() {
 let monthTabs = [];
 let activeMonthName = null;
 
-let defaultMode = true; // true=Today->EndOfYear, false=single month full view
-let displayRowsCurrent = [];
+// defaultMode true = Today->EndOfYear across remaining months
+let defaultMode = true;
 
+let displayRowsCurrent = [];
 let currentPage = 1;
 let pageSize = (els.pageSize && parseInt(els.pageSize.value, 10)) || 15;
-let sortCol = 2; // Date column index
+
+let sortCol = 2; // Date index in output table
 let sortDir = "asc";
 
 let filterStartMs = null;
@@ -328,7 +333,7 @@ document.addEventListener("DOMContentLoaded", () => {
     renderTable();
   });
 
-  // Scorecard click -> single month (full)
+  // Scorecard click = Full month view
   els.cards?.addEventListener("click", (e) => {
     const card = e.target.closest(".card[data-name]");
     if (!card) return;
@@ -350,7 +355,7 @@ document.addEventListener("DOMContentLoaded", () => {
    First paint
    ========================= */
 async function loadTabsAndFirstPaint() {
-  // 1) Sheet names
+  // ✅ Get sheet tabs (already filtered on backend)
   const names = await apiGet("/api/getSheetNames", "getSheetNames").catch(() => []);
   monthTabs = Array.isArray(names) ? names.filter(isMonthSheet) : [];
   monthTabs = sortMonthNamesJanToDec(monthTabs);
@@ -360,16 +365,16 @@ async function loadTabsAndFirstPaint() {
     return;
   }
 
-  // 2) Current month selection
+  // ✅ Active month is current month
   activeMonthName = pickCurrentMonthTab(monthTabs);
 
-  // 3) Default = Today → End of Year
+  // ✅ Default mode
   forceDefaultMode();
 
-  // 4) Scorecards (Jan→Dec)
+  // ✅ Scorecards
   await refreshCards();
 
-  // 5) Default load table
+  // ✅ Load table
   await reload();
 }
 
@@ -380,7 +385,7 @@ function endOfYear(d) {
 function forceDefaultMode() {
   defaultMode = true;
 
-  // start = today 00:00 local
+  // Start = today 00:00 local
   const now = new Date();
   const start = new Date(now);
   start.setHours(0, 0, 0, 0);
@@ -421,14 +426,10 @@ async function refreshCards() {
     return;
   }
 
-  // ✅ Only month sheets, always Jan→Dec
+  // Enforce Jan->Dec on frontend too
   items = items
     .filter((x) => x && isMonthSheet(x.name))
-    .sort((a, b) => {
-      const pa = parseMonthSheet(a.name);
-      const pb = parseMonthSheet(b.name);
-      return (pa?.monthIndex ?? 99) - (pb?.monthIndex ?? 99);
-    });
+    .sort((a, b) => (parseMonthSheet(a.name)?.monthIndex ?? 99) - (parseMonthSheet(b.name)?.monthIndex ?? 99));
 
   const j = JSON.stringify(items);
   if (j === lastCardsJSON) {
@@ -464,22 +465,21 @@ async function reload() {
     .getElementById("panel-monthly")
     ?.classList.contains("open");
 
-  // If monthly is closed, always default mode
   if (!monthlyOpen) forceDefaultMode();
 
   if (defaultMode) return reloadDefaultTodayToEndOfYear();
   return reloadSingleMonth(activeMonthName);
 }
 
-/* ✅ Default Mode = Today → End of Year across remaining months */
+/* ✅ Default mode = Today → End of Year across remaining months */
 async function reloadDefaultTodayToEndOfYear() {
   resetTableState();
 
   const now = new Date();
   const currentMonthIndex = now.getMonth();
 
-  // Only current month → Dec
-  const wanted = monthTabs.filter((n) => {
+  // Only current month -> Dec within same year
+  const list = monthTabs.filter((n) => {
     const p = parseMonthSheet(n);
     if (!p) return false;
 
@@ -489,9 +489,7 @@ async function reloadDefaultTodayToEndOfYear() {
     return p.monthIndex >= currentMonthIndex;
   });
 
-  const list = wanted.length ? wanted : monthTabs.slice();
-
-  const allRows = [];
+  const rowsAll = [];
 
   for (const sheetName of list) {
     const payload = await apiGet(
@@ -501,16 +499,16 @@ async function reloadDefaultTodayToEndOfYear() {
 
     const rawRows = Array.isArray(payload.rows) ? payload.rows : [];
 
-    // Keep only BOOKED rows
+    // only BOOKED rows
     for (const r of rawRows) {
       if (String(r?.[COL_BOOKED] || "").trim().toUpperCase() !== "BOOKED") continue;
-      allRows.push(r);
+      rowsAll.push(r);
     }
   }
 
-  // Map + filter by today->end of year
-  const mapped = mapRowsForDisplay(allRows);
+  const mapped = mapRowsForDisplay(rowsAll);
 
+  // Filter today->end of year by actual Date column
   const filtered = mapped.filter((r) => {
     const ms = r.__dateMs;
     if (!Number.isFinite(ms)) return false;
@@ -519,17 +517,15 @@ async function reloadDefaultTodayToEndOfYear() {
 
   displayRowsCurrent = filtered.map((x) => x.display);
 
-  // Header
   drawHeader(OUT_COLS.map((c) => c.key));
 
-  // Summary label (Jan–Dec)
   const label = `${MONTHS_SHORT[currentMonthIndex]}–Dec`;
   setStatusLabel(`${label} (Today → End of Year)`, displayRowsCurrent.length);
 
   renderTable();
 }
 
-/* ✅ Scorecard Mode = FULL month */
+/* ✅ Single month view (full month) */
 async function reloadSingleMonth(tab) {
   if (!tab) return;
 
@@ -542,13 +538,11 @@ async function reloadSingleMonth(tab) {
 
   const rawRows = Array.isArray(payload.rows) ? payload.rows : [];
 
-  // Keep only BOOKED rows
   const bookedOnly = rawRows.filter(
     (r) => String(r?.[COL_BOOKED] || "").trim().toUpperCase() === "BOOKED"
   );
 
   const mapped = mapRowsForDisplay(bookedOnly);
-
   displayRowsCurrent = mapped.map((x) => x.display);
 
   drawHeader(OUT_COLS.map((c) => c.key));
@@ -558,7 +552,7 @@ async function reloadSingleMonth(tab) {
 }
 
 /* =========================
-   Row mapping + formatting
+   Mapping + formatting
    ========================= */
 function mapRowsForDisplay(rawRows) {
   return rawRows.map((row) => {
@@ -586,11 +580,10 @@ function mapRowsForDisplay(rawRows) {
   });
 }
 
-/* Excel date number -> JS epoch */
 function excelCellToDateMs(v) {
   if (v == null) return null;
 
-  // Excel numeric date
+  // Excel serial date -> JS epoch
   if (typeof v === "number" && Number.isFinite(v)) {
     return Math.round((v - 25569) * 86400 * 1000);
   }
@@ -604,11 +597,10 @@ function excelCellToDateMs(v) {
   return null;
 }
 
-/* Excel time number -> local time epoch */
 function excelCellToTimeMs(v) {
   if (v == null) return null;
 
-  // Excel datetime number -> fractional portion = time
+  // Excel serial datetime -> fractional portion is time-of-day
   if (typeof v === "number" && Number.isFinite(v)) {
     const frac = v - Math.floor(v);
     const totalMinutes = Math.round(frac * 24 * 60);
@@ -653,7 +645,7 @@ function excelCellToTimeMs(v) {
 }
 
 /* =========================
-   Table rendering
+   Table render
    ========================= */
 function resetTableState() {
   displayRowsCurrent = [];
@@ -681,7 +673,6 @@ function drawHeader(headers) {
   headers.forEach((h, idx) => {
     let label = String(h);
 
-    // append timezone to Start/End headers
     if ((label === "Start Time" || label === "End Time") && tzInfo?.abbr) {
       label = `${label} (${tzInfo.abbr})`;
     }
@@ -719,12 +710,11 @@ function updateHeaderState() {
 function renderTable() {
   const rows = displayRowsCurrent.slice();
 
-  // sort
   rows.sort((a, b) => {
     const va = a?.[sortCol] ?? "";
     const vb = b?.[sortCol] ?? "";
 
-    // sort by Date column
+    // Date sorting
     if (sortCol === 2) {
       const ta = Date.parse(String(va)) || -Infinity;
       const tb = Date.parse(String(vb)) || -Infinity;
@@ -817,10 +807,17 @@ function escapeHtml(str) {
 
 function fmtLocalDate(ms) {
   const d = new Date(ms);
-  return new Intl.DateTimeFormat(undefined, { year: "numeric", month: "numeric", day: "numeric" }).format(d);
+  return new Intl.DateTimeFormat(undefined, {
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+  }).format(d);
 }
 
 function fmtLocalTime(ms) {
   const d = new Date(ms);
-  return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(d);
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(d);
 }
