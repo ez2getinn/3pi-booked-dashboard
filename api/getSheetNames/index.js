@@ -1,108 +1,101 @@
 // api/getSheetNames/index.js
+const { graphGet, mustEnv, resolveSiteAndDrive } = require("../_shared/msGraph");
+
+/* ✅ Month detection (Jan / January / Jan 2026) */
+const MONTH_RX =
+  /^(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s+(\d{4}))?$/i;
+
+const MONTH_MAP = {
+  jan: 0,
+  feb: 1,
+  mar: 2,
+  apr: 3,
+  may: 4,
+  jun: 5,
+  jul: 6,
+  aug: 7,
+  sep: 8,
+  sept: 8,
+  oct: 9,
+  nov: 10,
+  dec: 11,
+};
+
+// ✅ Explicitly remove these tabs from frontend month list
+const EXCLUDED_TABS = new Set(["logs", "tech"]);
+
+function parseMonthSheet(name) {
+  const clean = String(name || "").trim();
+  if (!clean) return null;
+
+  const m = MONTH_RX.exec(clean);
+  if (!m) return null;
+
+  const key = m[1].slice(0, 3).toLowerCase();
+  const monthIndex = MONTH_MAP[key];
+  const year = m[2] ? parseInt(m[2], 10) : null;
+
+  if (monthIndex == null) return null;
+  return { monthIndex, year };
+}
+
 module.exports = async function (context, req) {
   try {
-    const tenantId = process.env.MS_TENANT_ID;
-    const clientId = process.env.MS_CLIENT_ID;
-    const clientSecret = process.env.MS_CLIENT_SECRET;
+    // (ensures env exists)
+    mustEnv("MS_EXCEL_FILE_ID");
 
-    const siteHost = process.env.MS_EXCEL_SITE_HOST; // ex: wasa001-my.sharepoint.com
-    const sitePath = process.env.MS_EXCEL_SITE_PATH; // ex: /personal/shahnazashir_wasa001_onmicrosoft_com
-    const fileId = process.env.MS_EXCEL_FILE_ID;     // ex: A8CF92E4-3946-46D0-8F65-988DB0939B46
+    const { driveId } = await resolveSiteAndDrive();
+    const fileId = mustEnv("MS_EXCEL_FILE_ID");
 
-    if (!tenantId || !clientId || !clientSecret) {
-      context.res = {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-        body: { ok: false, error: "Missing MS_TENANT_ID / MS_CLIENT_ID / MS_CLIENT_SECRET" }
-      };
-      return;
-    }
+    // 1) worksheet list
+    const wsUrl =
+      `/drives/${encodeURIComponent(driveId)}/items/${encodeURIComponent(fileId)}` +
+      `/workbook/worksheets?$select=name`;
 
-    if (!siteHost || !sitePath || !fileId) {
-      context.res = {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-        body: { ok: false, error: "Missing MS_EXCEL_SITE_HOST / MS_EXCEL_SITE_PATH / MS_EXCEL_FILE_ID" }
-      };
-      return;
-    }
+    const ws = await graphGet(wsUrl);
 
-    // 1) Get app-only token
-    const tokenRes = await fetch(`https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        grant_type: "client_credentials",
-        client_id: clientId,
-        client_secret: clientSecret,
-        scope: "https://graph.microsoft.com/.default"
-      })
+    // 2) only month sheets + exclude logs/tech
+    let sheetNames = (ws.value || [])
+      .map((x) => x.name)
+      .filter(Boolean)
+      .map((n) => String(n).trim())
+      .filter((n) => n.length > 0)
+      .filter((n) => !EXCLUDED_TABS.has(n.toLowerCase()))
+      .filter((n) => !!parseMonthSheet(n));
+
+    // 3) sort Jan→Dec (and by year if present)
+    sheetNames.sort((a, b) => {
+      const pa = parseMonthSheet(a);
+      const pb = parseMonthSheet(b);
+
+      const ya = pa?.year ?? 9999;
+      const yb = pb?.year ?? 9999;
+      if (ya !== yb) return ya - yb;
+
+      return (pa?.monthIndex ?? 0) - (pb?.monthIndex ?? 0);
     });
-
-    const tokenJson = await tokenRes.json();
-    if (!tokenRes.ok) {
-      context.res = {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-        body: { ok: false, error: "Token request failed", details: tokenJson }
-      };
-      return;
-    }
-
-    const accessToken = tokenJson.access_token;
-
-    // 2) Resolve SharePoint Site ID
-    const siteRes = await fetch(
-      `https://graph.microsoft.com/v1.0/sites/${siteHost}:${sitePath}`,
-      {
-        headers: { Authorization: `Bearer ${accessToken}` }
-      }
-    );
-
-    const siteJson = await siteRes.json();
-    if (!siteRes.ok) {
-      context.res = {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-        body: { ok: false, error: "Failed to resolve SharePoint site", details: siteJson }
-      };
-      return;
-    }
-
-    const siteId = siteJson.id;
-
-    // 3) Get Worksheets
-    const wsRes = await fetch(
-      `https://graph.microsoft.com/v1.0/sites/${siteId}/drive/items/${fileId}/workbook/worksheets?$select=name`,
-      {
-        headers: { Authorization: `Bearer ${accessToken}` }
-      }
-    );
-
-    const wsJson = await wsRes.json();
-    if (!wsRes.ok) {
-      context.res = {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-        body: { ok: false, error: "Failed to fetch worksheet list", details: wsJson }
-      };
-      return;
-    }
-
-    const names = (wsJson.value || [])
-      .map(w => w?.name)
-      .filter(Boolean);
 
     context.res = {
       status: 200,
-      headers: { "Content-Type": "application/json" },
-      body: names
+      headers: {
+        "Content-Type": "application/json",
+        "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+        Pragma: "no-cache",
+        Expires: "0",
+      },
+      body: sheetNames,
     };
   } catch (err) {
     context.res = {
       status: 500,
       headers: { "Content-Type": "application/json" },
-      body: { ok: false, error: err?.message || String(err) }
+      body: {
+        ok: false,
+        error: err?.message || String(err),
+        name: err?.name,
+        stack: err?.stack,
+        response: err?.response?.data || err?.response || null,
+      },
     };
   }
 };
